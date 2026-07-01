@@ -1,7 +1,8 @@
-#version 430 core
+#version 430
 
-in vec2 uv;
-out vec4 fragColor;
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(rgba32f, binding = 0) uniform image2D outputImage;
 
 #define NOP
 
@@ -592,13 +593,18 @@ vec3 debugView(uint mode, uint newtonIters, uint bounces, uint quadVisits,
 // Main
 // ---------------------------------------------------------------------
 void main() {
+  ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+
+  vec2 centerPixel = vec2(gl_GlobalInvocationID.xy) + 0.5;
+  vec2 uv = centerPixel / resolution;
+
   // Seed the RNG once per pixel per frame.
-  seedRng(uvec2(gl_FragCoord.xy), frameIndex);
+  seedRng(uvec2(pixel.xy), frameIndex);
   dbgNewtonIters = 0u;
   dbgQuadVisits = 0u;
   panic = false;
 
-  vec2 jitteredUV = (gl_FragCoord.xy + jitter) / resolution;
+  vec2 jitteredUV = (pixel.xy + jitter) / resolution;
   vec2 ndc = jitteredUV * 2.0 - 1.0;
   vec4 clip = vec4(ndc, -1.0, 1.0);
   vec4 view = invProj * clip;
@@ -706,19 +712,23 @@ void main() {
     throughput *= tint;
   }
 
+  vec4 pixelColor;
+
   // Debug views bypass temporal accumulation entirely and show this
   // frame's raw data directly.
   if (configBuffer.viewMode != VIEW_NORMAL) {
-    fragColor =
+    pixelColor =
         vec4(debugView(configBuffer.viewMode, dbgNewtonIters, dbgBounces,
                        dbgQuadVisits, dbgHadFirstHit, dbgFirstNormal,
                        dbgFirstAlbedo, dbgFirstRoughness, dbgFirstDepth),
              1.0);
     return;
+  } else {
+    vec3 history =
+        texture(historyTex, uv).rgb; // unjittered uv, sampling last result
+    vec3 result = mix(history, color, 1.0 / float(frameIndex + 1u));
+    pixelColor = vec4(result * configBuffer.exposure, 1.0);
   }
 
-  vec3 history =
-      texture(historyTex, uv).rgb; // unjittered uv, sampling last result
-  vec3 result = mix(history, color, 1.0 / float(frameIndex + 1u));
-  fragColor = vec4(result * configBuffer.exposure, 1.0);
+  imageStore(outputImage, pixel, pixelColor);
 }
