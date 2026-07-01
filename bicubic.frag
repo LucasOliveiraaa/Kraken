@@ -1,0 +1,724 @@
+#version 430 core
+
+in vec2 uv;
+out vec4 fragColor;
+
+#define NOP
+
+#define ATOMIC_ADD(a, b) NOP
+// #define INC(a) NOP
+// #define ATOMIC_ADD(a, b) atomicAdd(a, b)
+#define INC(a) a++
+
+// These must be declared before the SSBOs below, since GLSL buffer blocks
+// reference them by name and (unlike C) there's no forward declaration.
+const uint INVALID_INDEX = 0xFFFFFFFFu;
+const float EPS = 1.19e-7;
+const uint EPS_CONSTANT = 10;
+const float T0 = 10.0;
+const float T1 = 100.0;
+const float PI = 3.14159265358979323846;
+
+struct Material {
+  vec3 albedo;   // Diffuse color
+  vec3 emission; // Light emitted by the surface
+
+  float reflectivity; // 0 = diffuse, 1 = perfect mirror
+  float roughness;    // 0 = smooth, 1 = rough
+};
+
+const Material defaultMaterial =
+    Material(vec3(0.8, 0.8, 0.8), vec3(0.0), 1.0, 0.0);
+
+struct Plane {
+  float height, maxH, minH;
+  uint firstCPIdx;
+};
+
+struct QuadNode {
+  uint children;
+  uint firstIdx;
+  uint planeCount;
+  vec2 position;
+  float size;
+};
+
+struct Volume {
+  uint baseNodeIdx;
+  mat4 worldToVolume;
+  mat4 volumeToWorld;
+};
+
+// ---- ray ----
+struct Ray {
+  vec3 origin, direction;
+};
+
+// ---------------------------------------------------------------------
+// Uniforms & SSBOs
+// ---------------------------------------------------------------------
+
+// ---- camera uniforms ----
+uniform mat4 invView;
+uniform mat4 invProj;
+uniform vec3 cameraPos;
+uniform vec2 resolution;
+
+// --- constants ----
+uniform uint volumeCount;
+
+// ---- frame/seed uniform (needed for per-pixel, per-frame RNG) ----
+// Bump this every frame (e.g. accumulated frame count) so successive
+// frames get decorrelated noise that you can temporally accumulate.
+uniform sampler2D historyTex;
+uniform vec2 jitter; // sub-pixel offset in [-0.5, 0.5]
+uniform uint frameIndex;
+
+// ---- scene SSBOs ----
+layout(std430, binding = 1) buffer ControlPoints { float controlPoint[]; }
+controlPointBuffer;
+layout(std430, binding = 2) buffer Planes { Plane planes[]; }
+planeBuffer;
+layout(std430, binding = 3) buffer QuadTree { QuadNode nodes[]; }
+quadtreeBuffer;
+layout(std430, binding = 4) buffer Volumes { Volume volumes[]; }
+volumeBuffer;
+
+// ---- profiling counters ----
+// Aggregated per-frame across every invocation via atomicAdd. Indices here
+// must match `profile_buffer::counters` on the Rust side. Cleared to zero
+// by the CPU before each draw call, then read back and pushed into Tracy
+// plots once the GPU is done writing.
+#define COUNTER_NEWTON_ITERATIONS 0u
+#define COUNTER_PLANE_TESTS 1u
+#define COUNTER_QUAD_NODE_VISITS 2u
+#define COUNTER_RAY_BOUNCES 3u
+#define COUNTER_LIGHT_HITS 4u
+#define COUNTER_COUNT 5u
+
+layout(std430, binding = 5) buffer Profile { uint counters[COUNTER_COUNT]; }
+profileBuffer;
+
+// ---- render config (view mode etc.) ----
+// `viewMode` values must match `config_buffer::ViewMode` on the Rust side.
+#define VIEW_NORMAL 0u
+#define VIEW_NEWTON_ITERATIONS 1u
+#define VIEW_RAY_BOUNCES 2u
+#define VIEW_QUAD_NODE_VISITS 3u
+#define VIEW_NORMALS 4u
+#define VIEW_ALBEDO 5u
+#define VIEW_ROUGHNESS 6u
+#define VIEW_DEPTH 7u
+
+layout(std430, binding = 6) buffer Config {
+  uint viewMode;
+  float exposure;
+  uint newtonMaxSteps;
+  uint maxBounces;
+}
+configBuffer;
+
+// ---------------------------------------------------------------------
+// RNG (PCG hash) + hemisphere sampling
+// ---------------------------------------------------------------------
+// Per-invocation RNG state, seeded once in main() from the pixel
+// coordinate and frameIndex so each pixel/frame gets an independent
+// stream of pseudo-random numbers.
+uint rngState;
+
+// Per-invocation debug counters (plain globals, NOT atomics: each
+// fragment invocation gets its own copy, same as `rngState`). These track
+// this pixel's path totals for the heatmap-style debug views, in parallel
+// with the frame-aggregate atomics written into `profileBuffer`. Reset at
+// the top of main().
+uint dbgNewtonIters;
+uint dbgQuadVisits;
+
+// Per-invocation panic flag. If true, this pixel's path has gone off the rails.
+// This sets the pixel to red and stops further bounces, so you can see which
+// pixels are misbehaving.
+bool panic;
+
+uint pcgHash(uint x) {
+  uint state = x * 747796405u + 2891336453u;
+  uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+  return (word >> 22u) ^ word;
+}
+
+void seedRng(uvec2 pixel, uint frame) {
+  rngState = pixel.x * 1973u + pixel.y * 9277u + frame * 26699u + 1u;
+  rngState = pcgHash(rngState);
+}
+
+// Returns a uniform float in [0, 1).
+float randFloat() {
+  rngState = pcgHash(rngState);
+  return float(rngState) / 4294967296.0; // / 2^32
+}
+
+vec2 randFloat2() { return vec2(randFloat(), randFloat()); }
+
+// Builds an orthonormal basis around `n` (assumed normalized).
+mat3 orthonormalBasis(vec3 n) {
+  vec3 up = (abs(n.z) < 0.999) ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
+  vec3 tangent = normalize(cross(up, n));
+  vec3 bitangent = cross(n, tangent);
+  return mat3(tangent, bitangent, n);
+}
+
+// Cosine-weighted random direction in the hemisphere around `normal`.
+// Used both for diffuse bounces and for perturbing specular reflections
+// according to roughness.
+vec3 randomHemisphere(vec3 normal) {
+  vec2 u = randFloat2();
+
+  float r = sqrt(u.x);
+  float theta = 2.0 * PI * u.y;
+
+  float x = r * cos(theta);
+  float y = r * sin(theta);
+  float z = sqrt(max(0.0, 1.0 - u.x));
+
+  mat3 basis = orthonormalBasis(normal);
+  return normalize(basis * vec3(x, y, z));
+}
+
+// ---------------------------------------------------------------------
+// Bicubic function evaluation
+// ---------------------------------------------------------------------
+struct FunctionEvaluation {
+  float height;
+  vec2 grad;
+};
+
+struct Basis {
+  float b[3];
+  float db[3];
+};
+
+Basis basis(float t) {
+  float t2 = t * t;
+  float twoT = 2.0 * t;
+
+  Basis r;
+
+  r.b[0] = 1.0 - twoT + t2;
+  r.b[1] = twoT - 2.0 * t2;
+  r.b[2] = t2;
+
+  r.db[0] = twoT - 2.0;
+  r.db[1] = 2.0 - 2.0 * twoT;
+  r.db[2] = twoT;
+
+  return r;
+}
+
+FunctionEvaluation evalFunction(uint index, float x, float y, float T) {
+  Basis bx = basis(x);
+  Basis by = basis(y);
+
+  float height = 0.0;
+  float dx = 0.0;
+  float dy = 0.0;
+
+  for (int i = 0; i < 3; ++i) {
+    for (int j = 0; j < 3; ++j) {
+      float c = controlPointBuffer.controlPoint[index + i * 3 + j];
+      height += bx.b[i] * by.b[j] * c;
+      dx += bx.db[i] * by.b[j] * c;
+      dy += bx.b[i] * by.db[j] * c;
+    }
+  }
+
+  return FunctionEvaluation(height, vec2(dx, dy));
+}
+
+// ---------------------------------------------------------------------
+// ISF / Newton root finding
+// ---------------------------------------------------------------------
+Ray normalizeRay(in Ray ray, vec3 origin, float size) {
+  return Ray((ray.origin - origin) / size, ray.direction / size);
+}
+
+struct ISFEvaluation {
+  float isf, jacobian;
+  FunctionEvaluation eval;
+};
+
+ISFEvaluation evalISF(in Plane plane, Ray normRay, Ray origRay, float t,
+                      float T) {
+  vec2 proj = normRay.origin.xy + normRay.direction.xy * t;
+  float z = origRay.origin.z + origRay.direction.z * t;
+  FunctionEvaluation eval = evalFunction(plane.firstCPIdx, proj.x, proj.y, T);
+  float height = plane.height + eval.height;
+  float isf = height - z;
+  float jacobian = dot(eval.grad, normRay.direction.xy) - normRay.direction.z;
+  return ISFEvaluation(isf, jacobian, eval);
+}
+
+struct NewtonStep {
+  float t, isf;
+  FunctionEvaluation eval;
+};
+
+NewtonStep newtonStep(in Plane plane, Ray normRay, Ray origRay, float t,
+                      float T) {
+  ISFEvaluation eval = evalISF(plane, normRay, origRay, t, T);
+  return NewtonStep(t - (eval.isf / eval.jacobian), eval.isf, eval.eval);
+}
+
+// ---------------------------------------------------------------------
+// Plane / domain intersection
+// ---------------------------------------------------------------------
+struct Hit {
+  bool hit;
+
+  float t;
+
+  vec3 point;
+  vec3 normal;
+
+  Material material;
+};
+
+float evalEpsilon(float T) { return max(1e-5, float(EPS_CONSTANT) * EPS * T); }
+
+Hit hitPlane(in QuadNode domain, in Plane plane, Ray ray, float accT, float T,
+             float entryT, float exitT) {
+  Ray normRay = normalizeRay(ray, vec3(domain.position, 0.0), domain.size);
+  float epsilon = evalEpsilon(T);
+  float t = accT;
+
+  for (uint i = 0u; i < configBuffer.newtonMaxSteps; i++) {
+    ATOMIC_ADD(profileBuffer.counters[COUNTER_NEWTON_ITERATIONS], 1u);
+    INC(dbgNewtonIters);
+
+    NewtonStep nStep = newtonStep(plane, normRay, ray, t, T + t);
+    if (abs(nStep.isf) <= epsilon) {
+      vec3 normal = normalize(vec3(-nStep.eval.grad.x / domain.size,
+                                   -nStep.eval.grad.y / domain.size, 1.0));
+
+      return Hit(true, t, ray.origin + ray.direction * t, normal,
+                 defaultMaterial);
+    }
+    t = nStep.t;
+    epsilon = evalEpsilon(T + t);
+
+    if (t < entryT || t > exitT)
+      break;
+  }
+  return Hit(false, 0.0, vec3(0.0), vec3(0.0), defaultMaterial);
+}
+
+Hit hitDomain(in QuadNode domain, Ray ray, float T, float entryT, float exitT) {
+  float entryZ = ray.origin.z + ray.direction.z * entryT;
+  float exitZ = ray.origin.z + ray.direction.z * exitT;
+  float maxH = max(entryZ, exitZ);
+  float minH = min(entryZ, exitZ);
+
+  uint flip = uint(ray.direction.z < 0.0);
+  for (uint i = 0u; i < domain.planeCount; ++i) {
+    uint idx = i ^ (flip * (domain.planeCount - 1u));
+    Plane p = planeBuffer.planes[domain.firstIdx + idx];
+
+    bool above = p.minH > maxH;
+    bool below = p.maxH < minH;
+    bool skip = (below && flip == 0u) || (above && flip == 1u);
+    bool stop = (above && flip == 0u) || (below && flip == 1u);
+
+    if (stop)
+      break;
+    if (skip)
+      continue;
+
+    ATOMIC_ADD(profileBuffer.counters[COUNTER_PLANE_TESTS], 1u);
+
+    float tEnterPlaneZ = (ray.direction.z > 0.0)
+                             ? (p.minH - ray.origin.z) / ray.direction.z
+                             : (p.maxH - ray.origin.z) / ray.direction.z;
+
+    float accT_plane = max(entryT, tEnterPlaneZ);
+    Hit hit = hitPlane(domain, p, ray, accT_plane, T, entryT, exitT);
+    if (hit.hit)
+      return hit;
+  }
+
+  return Hit(false, 0.0, vec3(0.0), vec3(0.0), defaultMaterial);
+}
+
+// ---------------------------------------------------------------------
+// Quadtree traversal / volume intersection
+// ---------------------------------------------------------------------
+struct StackItem {
+  uint nodeIdx;
+  float tEntry, tExit;
+};
+
+bool intersectQuadXY(Ray ray, vec2 minP, vec2 maxP, float tMin, float tMax,
+                     out float entryT, out float exitT) {
+  vec2 invDir = 1.0 / ray.direction.xy;
+  vec2 t0 = (minP - ray.origin.xy) * invDir;
+  vec2 t1 = (maxP - ray.origin.xy) * invDir;
+  vec2 tmin2 = min(t0, t1);
+  vec2 tmax2 = max(t0, t1);
+  entryT = max(max(tmin2.x, tmin2.y), tMin);
+  exitT = min(min(tmax2.x, tmax2.y), tMax);
+  return entryT <= exitT;
+}
+
+Hit hitVolume(uint volumeIdx, Ray worldRay, float T, float tMin, float tMax) {
+  Volume vol = volumeBuffer.volumes[volumeIdx];
+
+  Ray ray;
+  ray.origin = (vol.worldToVolume * vec4(worldRay.origin, 1.0)).xyz;
+  ray.direction = (vol.worldToVolume * vec4(worldRay.direction, 0.0)).xyz;
+
+  StackItem stack[32];
+  int sp = 0;
+  stack[sp++] = StackItem(vol.baseNodeIdx, tMin, tMax);
+
+  while (sp > 0) {
+    StackItem item = stack[--sp];
+    QuadNode node = quadtreeBuffer.nodes[item.nodeIdx];
+
+    ATOMIC_ADD(profileBuffer.counters[COUNTER_QUAD_NODE_VISITS], 1u);
+    INC(dbgQuadVisits);
+
+    float entryT, exitT;
+    if (!intersectQuadXY(ray, node.position, node.position + vec2(node.size),
+                         item.tEntry, item.tExit, entryT, exitT))
+      continue;
+
+    if (node.children == 0u) {
+      Hit h = hitDomain(node, ray, T, entryT, exitT);
+
+      if (h.hit) {
+        mat3 normalMatrix = transpose(mat3(vol.worldToVolume));
+
+        h.point = (vol.volumeToWorld * vec4(h.point, 1)).xyz;
+        h.normal = normalize(normalMatrix * h.normal);
+        return h;
+      }
+    } else {
+      uint base = node.firstIdx;
+      StackItem childItems[4];
+      int childCount = 0;
+
+      for (int i = 0; i < 4; i++) {
+        QuadNode c = quadtreeBuffer.nodes[base + i];
+        float cEntry, cExit;
+        if (intersectQuadXY(ray, c.position, c.position + vec2(c.size), entryT,
+                            exitT, cEntry, cExit))
+          childItems[childCount++] = StackItem(uint(base + i), cEntry, cExit);
+      }
+
+      // Bubble sort by tEntry (4 items max)
+      for (int i = 0; i < childCount - 1; i++)
+        for (int j = i + 1; j < childCount; j++)
+          if (childItems[j].tEntry < childItems[i].tEntry) {
+            StackItem tmp = childItems[i];
+            childItems[i] = childItems[j];
+            childItems[j] = tmp;
+          }
+
+      // Push far -> near so near is popped first
+      for (int i = childCount - 1; i >= 0; i--)
+        stack[sp++] = childItems[i];
+    }
+  }
+
+  return Hit(false, 0.0, vec3(0.0), vec3(0.0), defaultMaterial);
+}
+
+Hit hitWorld(Ray worldRay, float T, float tMin, float tMax) {
+  Hit bestHit = Hit(false, 0.0, vec3(0.0), vec3(0.0), defaultMaterial);
+
+  for (uint i = 0u; i < volumeCount; i++) {
+    Hit hit = hitVolume(i, worldRay, T, tMin, tMax);
+    if (hit.hit && (!bestHit.hit || hit.t < bestHit.t)) {
+      bestHit = hit;
+    }
+  }
+
+  return bestHit;
+}
+
+// ---------------------------------------------------------------------
+// Lights & scene composition
+// ---------------------------------------------------------------------
+struct SphereLight {
+  vec3 position;
+  float radius;
+
+  Material material;
+};
+
+const uint lightCount = 2u;
+SphereLight lights[lightCount] = SphereLight[lightCount](
+    SphereLight(vec3(-1, 1, 0), 0.5,
+                Material(vec3(1), vec3(1.0, 0, 0), 1.0, 0.0)),
+    SphereLight(vec3(1, 1, 0), 0.5,
+                Material(vec3(1), vec3(0.0, 0, 1.0), 1.0, 0.0)));
+
+Hit hitLights(Ray ray) {
+  Hit best;
+  best.hit = false;
+  best.t = 1e30;
+
+  for (uint i = 0u; i < lightCount; i++) {
+    SphereLight light = lights[i];
+
+    vec3 oc = ray.origin - light.position;
+
+    float a = dot(ray.direction, ray.direction);
+    float b = dot(oc, ray.direction);
+    float c = dot(oc, oc) - light.radius * light.radius;
+
+    float d = b * b - a * c;
+
+    if (d < 0.0)
+      continue;
+
+    float s = sqrt(d);
+
+    float t0 = (-b - s) / a;
+    float t1 = (-b + s) / a;
+
+    float t = (t0 > 0.0) ? t0 : t1;
+
+    if (t > 0.0 && t < best.t) {
+      best.hit = true;
+      best.t = t;
+
+      best.point = ray.origin + t * ray.direction;
+      best.normal = normalize(best.point - light.position);
+
+      best.material = light.material;
+    }
+  }
+
+  if (best.hit)
+    ATOMIC_ADD(profileBuffer.counters[COUNTER_LIGHT_HITS], 1u);
+
+  return best;
+}
+
+Hit hitScene(Ray ray, float T, float tMin, float tMax) {
+  Hit obj = hitWorld(ray, T, tMin, tMax);
+
+  if (obj.hit) {
+    obj.material = Material(vec3(0.8), vec3(0.0), 0.0, 1.0); // Plastic-like
+  }
+
+  Hit light = hitLights(ray);
+
+  if (!obj.hit)
+    return light;
+
+  if (!light.hit)
+    return obj;
+
+  return (obj.t < light.t) ? obj : light;
+}
+
+// ---------------------------------------------------------------------
+// Sky
+// ---------------------------------------------------------------------
+vec3 skyGroundColor(vec3 dir) {
+  const vec3 skyColor = vec3(0.30, 0.45, 0.85);     // zenith
+  const vec3 horizonColor = vec3(0.70, 0.75, 0.90); // band at the horizon
+  const vec3 groundColor = vec3(0.10, 0.10, 0.10);  // nadir
+
+  const float skyExponent = 0.4;    // lower = sky color spreads down further
+  const float groundExponent = 0.4; // lower = ground color spreads up further
+
+  float t = dir.y; // -1 (straight down) .. 0 (horizon) .. 1 (straight up)
+
+  if (t >= 0.0)
+    return mix(horizonColor, skyColor, pow(t, skyExponent));
+  else
+    return mix(horizonColor, groundColor, pow(-t, groundExponent));
+}
+
+// ---------------------------------------------------------------------
+// Debug view-mode helpers
+// ---------------------------------------------------------------------
+// Blue -> green -> red heatmap for visualizing per-pixel counters. `t`
+// should be pre-normalized to roughly [0, 1]; values above 1 simply clamp
+// to red rather than wrapping, so "too hot" is still visually obvious.
+vec3 heatmap(float t) {
+  t = clamp(t, 0.0, 1.0);
+  vec3 cold = mix(vec3(0.0, 0.0, 1.0), vec3(0.0, 1.0, 0.0), min(1.0, t * 2.0));
+  vec3 hot =
+      mix(vec3(0.0, 1.0, 0.0), vec3(1.0, 0.0, 0.0), max(0.0, t * 2.0 - 1.0));
+  return t < 0.5 ? cold : hot;
+}
+
+// Renders one of the non-photoreal debug views. Bypasses temporal
+// accumulation entirely -- these are meant to show this frame's raw data,
+// not a denoised average of it.
+vec3 debugView(uint mode, uint newtonIters, uint bounces, uint quadVisits,
+               bool hadFirstHit, vec3 firstNormal, vec3 firstAlbedo,
+               float firstRoughness, float firstDepth) {
+  if (mode == VIEW_NEWTON_ITERATIONS)
+    return heatmap(float(newtonIters) / 40.0);
+
+  if (mode == VIEW_RAY_BOUNCES)
+    return heatmap(float(bounces) / float(configBuffer.maxBounces));
+
+  if (mode == VIEW_QUAD_NODE_VISITS)
+    return heatmap(float(quadVisits) / 32.0);
+
+  if (!hadFirstHit)
+    return skyGroundColor(
+        vec3(0.0, 1.0, 0.0)); // flat background tint for "no hit" pixels
+
+  if (mode == VIEW_NORMALS)
+    return firstNormal * 0.5 + 0.5;
+
+  if (mode == VIEW_ALBEDO)
+    return firstAlbedo;
+
+  if (mode == VIEW_ROUGHNESS)
+    return vec3(firstRoughness);
+
+  if (mode == VIEW_DEPTH)
+    return vec3(clamp(firstDepth / 20.0, 0.0, 1.0));
+
+  return vec3(1.0, 0.0, 1.0); // magenta: unrecognized mode, easy to spot
+}
+
+// ---------------------------------------------------------------------
+// Main
+// ---------------------------------------------------------------------
+void main() {
+  // Seed the RNG once per pixel per frame.
+  seedRng(uvec2(gl_FragCoord.xy), frameIndex);
+  dbgNewtonIters = 0u;
+  dbgQuadVisits = 0u;
+  panic = false;
+
+  vec2 jitteredUV = (gl_FragCoord.xy + jitter) / resolution;
+  vec2 ndc = jitteredUV * 2.0 - 1.0;
+  vec4 clip = vec4(ndc, -1.0, 1.0);
+  vec4 view = invProj * clip;
+  view.xyz /= view.w;
+
+  float totalT = 0.0;
+  vec3 color = vec3(0.0);
+  vec3 throughput = vec3(1.0);
+
+  Ray ray;
+  ray.origin = cameraPos;
+  ray.direction = normalize((invView * vec4(view.xyz, 0)).xyz);
+
+  // Per-pixel debug bookkeeping for the single-hit debug views (Normals /
+  // Albedo / Roughness / Depth). Newton-iteration and quad-node-visit
+  // totals for the *whole path* live in the `dbgNewtonIters` /
+  // `dbgQuadVisits` globals instead.
+  uint dbgBounces = 0u;
+  bool dbgHadFirstHit = false;
+  vec3 dbgFirstNormal = vec3(0.0);
+  vec3 dbgFirstAlbedo = vec3(0.0);
+  float dbgFirstRoughness = 0.0;
+  float dbgFirstDepth = 0.0;
+
+  for (uint bounce = 0u; bounce < configBuffer.maxBounces; ++bounce) {
+    ATOMIC_ADD(profileBuffer.counters[COUNTER_RAY_BOUNCES], 1u);
+    dbgBounces = bounce + 1u;
+
+    Hit hit = hitScene(ray, totalT, 0.001, 1e6);
+
+    // if (panic) {
+    //   color = vec3(1.0, 0.0, 0.0);
+    //   break;
+    // }
+
+    if (!hit.hit) {
+      color += throughput * skyGroundColor(ray.direction);
+      break;
+    }
+
+    // Collect emitted light.
+    color += throughput * hit.material.emission;
+
+    // Flip the normal if necessary.
+    vec3 N = hit.normal;
+
+    if (dot(N, ray.direction) > 0.0)
+      N = -N;
+
+    if (bounce == 0u) {
+      dbgHadFirstHit = true;
+      dbgFirstNormal = N;
+      dbgFirstAlbedo = hit.material.albedo;
+      dbgFirstRoughness = hit.material.roughness;
+      dbgFirstDepth = totalT + hit.t;
+    }
+
+    // Simple direct lighting from the two emissive spheres.
+    // Only the diffuse portion of the BRDF gets this analytic term;
+    // the specular lobe is handled stochastically below via the
+    // indirect bounce (so it picks up reflections of the lights too).
+    vec3 direct = vec3(0.0);
+
+    for (uint i = 0u; i < lightCount; i++) {
+      vec3 L = normalize(lights[i].position - hit.point);
+
+      float NdotL = max(dot(N, L), 0.0);
+
+      direct += lights[i].material.emission * NdotL;
+    }
+
+    color += throughput * hit.material.albedo *
+             (1.0 - hit.material.reflectivity) * direct;
+
+    // Stochastically choose a specular or diffuse bounce, weighted by
+    // reflectivity. This is an unbiased way to mix the two lobes
+    // without having to split throughput across multiple rays.
+    vec3 newDir;
+    vec3 tint;
+
+    if (randFloat() < hit.material.reflectivity) {
+      // Specular lobe: start from the perfect mirror direction and
+      // blend toward a cosine-weighted random direction as roughness
+      // increases (0 = perfect mirror, 1 = fully diffuse-like lobe).
+      vec3 reflectDir = reflect(ray.direction, N);
+      vec3 fuzzDir = randomHemisphere(reflectDir);
+
+      newDir = normalize(mix(reflectDir, fuzzDir, hit.material.roughness));
+
+      // Guard against the fuzzed direction going below the surface.
+      if (dot(newDir, N) <= 0.0)
+        newDir = reflectDir;
+
+      tint = vec3(1.0);
+    } else {
+      // Diffuse lobe: cosine-weighted sample over the hemisphere.
+      newDir = randomHemisphere(N);
+      tint = hit.material.albedo;
+    }
+
+    ray.origin = hit.point + N * 1e-3;
+    ray.direction = newDir;
+
+    totalT += hit.t;
+    throughput *= tint;
+  }
+
+  // Debug views bypass temporal accumulation entirely and show this
+  // frame's raw data directly.
+  if (configBuffer.viewMode != VIEW_NORMAL) {
+    fragColor =
+        vec4(debugView(configBuffer.viewMode, dbgNewtonIters, dbgBounces,
+                       dbgQuadVisits, dbgHadFirstHit, dbgFirstNormal,
+                       dbgFirstAlbedo, dbgFirstRoughness, dbgFirstDepth),
+             1.0);
+    return;
+  }
+
+  vec3 history =
+      texture(historyTex, uv).rgb; // unjittered uv, sampling last result
+  vec3 result = mix(history, color, 1.0 / float(frameIndex + 1u));
+  fragColor = vec4(result * configBuffer.exposure, 1.0);
+}
