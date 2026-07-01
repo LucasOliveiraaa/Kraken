@@ -73,7 +73,7 @@ fn main() {
     let inv_proj = Mat4::from_perspective(1.0472, aspect, 0.1, 100.0).inverse();
 
     // ---------- camera ----------
-    let mut camera = Camera::new(Vec3::new(0.0, 0.0, 10.0));
+    let mut camera = Camera::new(Vec3::new(0.0, 0.0, 7.5));
     let mut prev_cam = (camera.pos, camera.yaw, camera.pitch);
 
     // ---------- accumulation / profiling / config ----------

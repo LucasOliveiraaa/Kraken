@@ -6,9 +6,9 @@ layout(rgba32f, binding = 0) uniform image2D outputImage;
 
 #define NOP
 
-#define ATOMIC_ADD(a, b) NOP
+// #define ATOMIC_ADD(a, b) NOP
 // #define INC(a) NOP
-// #define ATOMIC_ADD(a, b) atomicAdd(a, b)
+#define ATOMIC_ADD(a, b) atomicAdd(a, b)
 #define INC(a) a++
 
 // These must be declared before the SSBOs below, since GLSL buffer blocks
@@ -456,9 +456,9 @@ struct SphereLight {
 
 const uint lightCount = 2u;
 SphereLight lights[lightCount] = SphereLight[lightCount](
-    SphereLight(vec3(-1, 1, 0), 0.5,
+    SphereLight(vec3(-1, 0, 0), 0.5,
                 Material(vec3(1), vec3(1.0, 0, 0), 1.0, 0.0)),
-    SphereLight(vec3(1, 1, 0), 0.5,
+    SphereLight(vec3(1, 0, 0), 0.5,
                 Material(vec3(1), vec3(0.0, 0, 1.0), 1.0, 0.0)));
 
 Hit hitLights(Ray ray) {
