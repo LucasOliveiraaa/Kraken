@@ -10,12 +10,12 @@ mod structure;
 use glfw::{Action, Context, Key, WindowMode};
 
 use accum_buffer::AccumBuffer;
-use camera::{halton_jitter, Camera};
+use camera::{Camera, halton_jitter};
 use config_buffer::ConfigBuffer;
 use gl_util::{compile_shader, link_program, uniform_loc};
 use kmath::{Mat4, Vec2, Vec3};
 use profile_buffer::ProfileBuffer;
-use scene::{build_mock_scene, SceneBuffers};
+use scene::{SceneBuffers, build_mock_scene};
 
 fn main() {
     tracy_client::Client::start();
@@ -48,15 +48,13 @@ fn main() {
     gl::load_with(|s| window.get_proc_address(s) as *const _);
 
     // ---------- shaders ----------
-    let vert_src = std::fs::read_to_string("vert.vert").expect("Failed to read vert.vert");
-    let frag_src = std::fs::read_to_string("bicubic.frag").expect("Failed to read bicubic.frag");
+    let comp_src =
+        std::fs::read_to_string("raytracer.comp").expect("Failed to read raytracer.comp");
 
-    let vert_shader = compile_shader(&vert_src, gl::VERTEX_SHADER);
-    let frag_shader = compile_shader(&frag_src, gl::FRAGMENT_SHADER);
-    let program = link_program(vert_shader, frag_shader);
+    let comp_shader = compile_shader(&comp_src, gl::COMPUTE_SHADER);
+    let program = link_program(comp_shader);
     unsafe {
-        gl::DeleteShader(vert_shader);
-        gl::DeleteShader(frag_shader);
+        gl::DeleteShader(comp_shader);
     }
 
     // Dummy VAO — required by the core profile even though the fullscreen
@@ -152,7 +150,17 @@ fn main() {
             gl::BeginQuery(gl::TIME_ELAPSED, query);
 
             let _span = tracy_client::span!("Render pass");
-            gl::BindFramebuffer(gl::FRAMEBUFFER, accum.fbo[write_idx]);
+
+            gl::BindImageTexture(
+                0,
+                accum.tex[write_idx],
+                0,
+                gl::FALSE,
+                0,
+                gl::WRITE_ONLY,
+                gl::RGBA32F,
+            );
+
             gl::Viewport(0, 0, accum.width, accum.height);
             gl::UseProgram(program);
 
@@ -165,19 +173,45 @@ fn main() {
                 gl::Uniform1ui(uniform_loc(program, "frameIndex"), frame_index);
                 gl::Uniform2f(uniform_loc(program, "jitter"), jitter.x, jitter.y);
 
-                gl::Uniform1ui(uniform_loc(program, "volumeCount"), scene_data.volumes.len() as u32);
+                gl::Uniform1ui(
+                    uniform_loc(program, "volumeCount"),
+                    scene_data.volumes.len() as u32,
+                );
 
-                gl::UniformMatrix4fv(uniform_loc(program, "invView"), 1, gl::FALSE, inv_view.as_ptr());
-                gl::UniformMatrix4fv(uniform_loc(program, "invProj"), 1, gl::FALSE, inv_proj.as_ptr());
-                gl::Uniform3f(uniform_loc(program, "cameraPos"), camera.pos.x, camera.pos.y, camera.pos.z);
-                gl::Uniform2f(uniform_loc(program, "resolution"), resolution.x, resolution.y);
+                gl::UniformMatrix4fv(
+                    uniform_loc(program, "invView"),
+                    1,
+                    gl::FALSE,
+                    inv_view.as_ptr(),
+                );
+                gl::UniformMatrix4fv(
+                    uniform_loc(program, "invProj"),
+                    1,
+                    gl::FALSE,
+                    inv_proj.as_ptr(),
+                );
+                gl::Uniform3f(
+                    uniform_loc(program, "cameraPos"),
+                    camera.pos.x,
+                    camera.pos.y,
+                    camera.pos.z,
+                );
+                gl::Uniform2f(
+                    uniform_loc(program, "resolution"),
+                    resolution.x,
+                    resolution.y,
+                );
 
                 profile_buffer.begin_frame();
                 config.upload_if_dirty();
             }
 
-            gl::BindVertexArray(vao);
-            gl::DrawArrays(gl::TRIANGLES, 0, 3);
+            gl::DispatchCompute(
+                (accum.width as u32 + 15) / 16,
+                (accum.height as u32 + 15) / 16,
+                1,
+            );
+            gl::MemoryBarrier(gl::ALL_BARRIER_BITS);
 
             profile_buffer.end_frame();
 

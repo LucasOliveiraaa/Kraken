@@ -31,13 +31,12 @@ pub fn compile_shader(src: &str, kind: GLenum) -> u32 {
     }
 }
 
-/// Links a vertex + fragment shader pair into a program, panicking with the
-/// driver's info log if linking fails. Does not delete the input shaders.
-pub fn link_program(vert: u32, frag: u32) -> u32 {
+/// Links a compute shader into a program, panicking with the
+/// driver's info log if linking fails. Does not delete the input shader.
+pub fn link_program(comp: u32) -> u32 {
     unsafe {
         let program = gl::CreateProgram();
-        gl::AttachShader(program, vert);
-        gl::AttachShader(program, frag);
+        gl::AttachShader(program, comp);
         gl::LinkProgram(program);
 
         let mut ok = 0;
