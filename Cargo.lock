@@ -1116,6 +1116,7 @@ dependencies = [
  "glutin",
  "glutin-winit",
  "kmath",
+ "krender",
  "raw-window-handle",
  "tracy-client",
  "winit",
@@ -1124,6 +1125,10 @@ dependencies = [
 [[package]]
 name = "krender"
 version = "0.1.0"
+dependencies = [
+ "glow",
+ "kmath",
+]
 
 [[package]]
 name = "kurbo"

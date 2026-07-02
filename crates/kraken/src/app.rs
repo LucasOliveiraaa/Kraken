@@ -10,6 +10,8 @@ use glutin::prelude::*;
 use glutin::surface::SurfaceAttributesBuilder;
 use glutin::surface::{Surface, WindowSurface};
 use glutin_winit::DisplayBuilder;
+use kmath::Vec2f;
+use krender::Renderer;
 use raw_window_handle::HasWindowHandle;
 use std::ffi::CString;
 use std::num::NonZeroU32;
@@ -21,6 +23,8 @@ use winit::window::Window;
 use winit::window::WindowAttributes;
 
 pub struct App {
+    renderer: Option<Renderer>,
+
     painter: Option<Painter>,
     egui_state: Option<State>,
     egui_ctx: EguiContext,
@@ -34,6 +38,8 @@ pub struct App {
 impl App {
     pub fn new() -> Self {
         Self {
+            renderer: None,
+
             window: None,
             gl: None,
             context: None,
@@ -121,6 +127,13 @@ impl ApplicationHandler for App {
         self.gl = Some(gl);
         self.painter = Some(painter);
         self.egui_state = Some(state);
+        self.renderer = Some(Renderer::new(
+            self.gl.as_ref().unwrap().clone(),
+            Vec2f::new(
+                self.window.as_ref().unwrap().inner_size().width as f32,
+                self.window.as_ref().unwrap().inner_size().height as f32,
+            ),
+        ));
     }
 
     fn window_event(
@@ -147,6 +160,17 @@ impl ApplicationHandler for App {
                     NonZeroU32::new(size.width.max(1)).unwrap(),
                     NonZeroU32::new(size.height.max(1)).unwrap(),
                 );
+
+                let scale = self.window.as_ref().unwrap().scale_factor();
+
+                let width = (size.width as f64 * scale) as i32;
+                let height = (size.height as f64 * scale) as i32;
+
+                if let Some(renderer) = &mut self.renderer {
+                    renderer
+                        .resize(Vec2f::new(width as f32, height as f32))
+                        .expect("Failed to resize window");
+                }
             }
 
             WindowEvent::RedrawRequested => {
