@@ -7,6 +7,8 @@ mod profile_buffer;
 mod scene;
 mod structure;
 
+use std::fs;
+
 use glfw::{Action, Context, Key, WindowMode};
 
 use accum_buffer::AccumBuffer;
@@ -46,10 +48,11 @@ fn main() {
     window.make_current();
     window.set_key_polling(true);
     gl::load_with(|s| window.get_proc_address(s) as *const _);
+    glfw.set_swap_interval(glfw::SwapInterval::None);
 
     // ---------- shaders ----------
     let comp_src =
-        std::fs::read_to_string("raytracer.comp").expect("Failed to read raytracer.comp");
+        fs::read_to_string("assets/shaders/raytracer.comp").expect("Failed to read compute shader");
 
     let comp_shader = compile_shader(&comp_src, gl::COMPUTE_SHADER);
     let program = link_program(comp_shader);
