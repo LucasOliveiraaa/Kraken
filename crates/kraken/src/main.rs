@@ -2,7 +2,6 @@ mod accum_buffer;
 mod camera;
 mod config_buffer;
 mod gl_util;
-mod kmath;
 mod profile_buffer;
 mod scene;
 mod structure;

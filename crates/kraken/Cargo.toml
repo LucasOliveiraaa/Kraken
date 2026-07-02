@@ -1,0 +1,9 @@
+[package]
+name = "kraken"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+glfw = "0.55"
+gl = "0.14"
+tracy-client = { version = "0.18.4", features = ["enable"] }
