@@ -1,14 +1,14 @@
 use std::array;
-use num_traits::Float;
+use num_traits::{Float, Num};
 
 use crate::matrix::Matrix;
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct Vector<T: Float, const N: usize> {
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Vector<T: Num + Copy, const N: usize> {
     data: [T; N],
 }
 
-impl<T: Float, const N: usize> Vector<T, N> {
+impl<T: Num + Copy, const N: usize> Vector<T, N> {
     pub fn new(data: [T; N]) -> Self {
         Self { data }
     }
@@ -44,7 +44,9 @@ impl<T: Float, const N: usize> Vector<T, N> {
     pub fn length_squared(&self) -> T {
         self.dot(self)
     }
+}
 
+impl<T: Float, const N: usize> Vector<T, N> {
     pub fn magnitude(&self) -> T {
         self.length_squared().sqrt()
     }
@@ -62,7 +64,7 @@ impl<T: Float, const N: usize> Vector<T, N> {
     }
 }
 
-impl<T: Float, const N: usize> std::ops::Add for Vector<T, N> {
+impl<T: Num + Copy, const N: usize> std::ops::Add for Vector<T, N> {
     type Output = Self;
 
     fn add(self, rhs: Self) -> Self {
@@ -72,7 +74,7 @@ impl<T: Float, const N: usize> std::ops::Add for Vector<T, N> {
     }
 }
 
-impl<T: Float, const N: usize> std::ops::Sub for Vector<T, N> {
+impl<T: Num + Copy, const N: usize> std::ops::Sub for Vector<T, N> {
     type Output = Self;
 
     fn sub(self, rhs: Self) -> Self {
@@ -82,7 +84,7 @@ impl<T: Float, const N: usize> std::ops::Sub for Vector<T, N> {
     }
 }
 
-impl<T: Float, const N: usize> std::ops::Mul<T> for Vector<T, N> {
+impl<T: Num + Copy, const N: usize> std::ops::Mul<T> for Vector<T, N> {
     type Output = Self;
 
     fn mul(self, scalar: T) -> Self {
@@ -92,7 +94,7 @@ impl<T: Float, const N: usize> std::ops::Mul<T> for Vector<T, N> {
     }
 }
 
-impl<T: Float, const N: usize> std::ops::Div<T> for Vector<T, N> {
+impl<T: Num + Copy, const N: usize> std::ops::Div<T> for Vector<T, N> {
     type Output = Self;
 
     fn div(self, scalar: T) -> Self {
@@ -112,7 +114,7 @@ impl<T: Float, const N: usize> std::ops::Neg for Vector<T, N> {
     }
 }
 
-impl<T: Float, const N: usize> std::ops::Index<usize> for Vector<T, N> {
+impl<T: Num + Copy, const N: usize> std::ops::Index<usize> for Vector<T, N> {
     type Output = T;
 
     fn index(&self, index: usize) -> &Self::Output {
@@ -120,13 +122,13 @@ impl<T: Float, const N: usize> std::ops::Index<usize> for Vector<T, N> {
     }
 }
 
-impl<T: Float, const N: usize> std::ops::IndexMut<usize> for Vector<T, N> {
+impl<T: Num + Copy, const N: usize> std::ops::IndexMut<usize> for Vector<T, N> {
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
         &mut self.data[index]
     }
 }
 
-impl<T: Float, const R: usize, const C: usize> std::ops::Mul<Matrix<T, R, C>>
+impl<T: Num + Copy, const R: usize, const C: usize> std::ops::Mul<Matrix<T, R, C>>
     for Vector<T, R>
 {
     type Output = Vector<T, C>;

@@ -1,12 +1,12 @@
-use num_traits::Float;
+use num_traits::{Float, Num};
 
 use crate::vector::Vector;
 
-pub struct Matrix<T, const R: usize, const C: usize> {
+pub struct Matrix<T: Num + Copy, const R: usize, const C: usize> {
     data: [[T; C]; R],
 }
 
-impl<T: Float, const R: usize, const C: usize> Matrix<T, R, C> {
+impl<T: Num + Copy, const R: usize, const C: usize> Matrix<T, R, C> {
     pub fn new(data: [[T; C]; R]) -> Self {
         Self { data }
     }
@@ -58,6 +58,12 @@ impl<T: Float, const R: usize, const C: usize> Matrix<T, R, C> {
         }
     }
 
+    pub fn data(&self) -> &[[T; C]; R] {
+        &self.data
+    }
+}
+
+impl<T: Float, const R: usize, const C: usize> Matrix<T, R, C> {
     pub fn inverse(&self) -> Option<Matrix<T, R, C>> {
         assert_eq!(R, C, "Inverse can only be calculated for square matrices");
 
@@ -109,13 +115,11 @@ impl<T: Float, const R: usize, const C: usize> Matrix<T, R, C> {
             unimplemented!("Inverse calculation is only implemented for 2x2 and 3x3 matrices");
         }
     }
-
-    pub fn data(&self) -> &[[T; C]; R] {
-        &self.data
-    }
 }
 
-impl<T: Float, const R: usize, const C: usize> std::ops::Mul<Matrix<T, C, R>> for Matrix<T, R, C> {
+impl<T: Num + Copy, const R: usize, const C: usize> std::ops::Mul<Matrix<T, C, R>>
+    for Matrix<T, R, C>
+{
     type Output = Matrix<T, R, R>;
 
     fn mul(self, rhs: Matrix<T, C, R>) -> Self::Output {
@@ -131,7 +135,9 @@ impl<T: Float, const R: usize, const C: usize> std::ops::Mul<Matrix<T, C, R>> fo
     }
 }
 
-impl<T: Float, const R: usize, const C: usize> std::ops::Mul<Vector<T, C>> for Matrix<T, R, C> {
+impl<T: Num + Copy, const R: usize, const C: usize> std::ops::Mul<Vector<T, C>>
+    for Matrix<T, R, C>
+{
     type Output = Vector<T, R>;
 
     fn mul(self, rhs: Vector<T, C>) -> Self::Output {
@@ -145,7 +151,7 @@ impl<T: Float, const R: usize, const C: usize> std::ops::Mul<Vector<T, C>> for M
     }
 }
 
-impl<T: Float, const R: usize, const C: usize> std::ops::Index<usize> for Matrix<T, R, C> {
+impl<T: Num + Copy, const R: usize, const C: usize> std::ops::Index<usize> for Matrix<T, R, C> {
     type Output = [T; C];
 
     fn index(&self, index: usize) -> &Self::Output {
@@ -153,7 +159,7 @@ impl<T: Float, const R: usize, const C: usize> std::ops::Index<usize> for Matrix
     }
 }
 
-impl<T: Float, const R: usize, const C: usize> std::ops::IndexMut<usize> for Matrix<T, R, C> {
+impl<T: Num + Copy, const R: usize, const C: usize> std::ops::IndexMut<usize> for Matrix<T, R, C> {
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
         &mut self.data[index]
     }
