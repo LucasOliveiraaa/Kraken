@@ -722,11 +722,16 @@ void main() {
     vec3 direct = vec3(0.0);
 
     for (uint i = 0u; i < lightCount; i++) {
-      vec3 L = normalize(lights[i].position - hit.point);
-
+      vec3 toLight = lights[i].position - hit.point;
+      float dist2 = dot(toLight, toLight);
+      vec3 L = toLight * inversesqrt(dist2);
       float NdotL = max(dot(N, L), 0.0);
-
-      direct += lights[i].material.emission * NdotL;
+      
+      Ray shadowRay = Ray(hit.point + N * 1e-3, L);
+      Hit occluder = hitScene(shadowRay, totalT, 0.001, sqrt(dist2) - 1e-2);
+      if (!occluder.hit) {
+        direct += lights[i].material.emission * NdotL / max(dist2, 1e-4);
+      }
     }
 
     color += throughput * hit.material.albedo *
