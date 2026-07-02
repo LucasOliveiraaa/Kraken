@@ -53,7 +53,6 @@ impl ApplicationHandler for App {
             .with_inner_size(PhysicalSize::new(800, 600));
 
         let template = ConfigTemplateBuilder::new();
-
         let display_builder = DisplayBuilder::new().with_window_attributes(Some(window_attributes));
 
         let (window, gl_config) = display_builder
@@ -104,10 +103,8 @@ impl ApplicationHandler for App {
 
         let gl = Arc::new(gl);
 
-        let painter = unsafe {
-            egui_glow::Painter::new(gl.clone(), "", None, false)
-                .expect("Failed to create egui painter")
-        };
+        let painter = egui_glow::Painter::new(gl.clone(), "", None, false)
+            .expect("Failed to create egui painter");
 
         let state = egui_winit::State::new(
             self.egui_ctx.clone(),
