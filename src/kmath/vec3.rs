@@ -42,6 +42,14 @@ impl Vec3 {
         Self { x, y, z }
     }
 
+    pub fn splat(value: f32) -> Self {
+        Self {
+            x: value,
+            y: value,
+            z: value,
+        }
+    }
+
     #[inline]
     pub fn dot(self, other: Self) -> f32 {
         self.x * other.x + self.y * other.y + self.z * other.z
@@ -79,6 +87,26 @@ impl Vec3 {
 
     pub fn extend(self, w: f32) -> Vec4 {
         Vec4::new(self.x, self.y, self.z, w)
+    }
+
+    pub fn min(self, other: Self) -> Self {
+        Self {
+            x: self.x.min(other.x),
+            y: self.y.min(other.y),
+            z: self.z.min(other.z),
+        }
+    }
+
+    pub fn max(self, other: Self) -> Self {
+        Self {
+            x: self.x.max(other.x),
+            y: self.y.max(other.y),
+            z: self.z.max(other.z),
+        }
+    }
+
+    pub fn into_array(self) -> [f32; 3] {
+        [self.x, self.y, self.z]
     }
 }
 

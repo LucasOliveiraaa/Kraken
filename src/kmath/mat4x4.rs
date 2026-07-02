@@ -233,6 +233,19 @@ impl Mat4 {
         ])
     }
 
+    pub fn transform_point3(&self, p: Vec3) -> Vec3 {
+        let x = self.m[0] * p.x + self.m[4] * p.y + self.m[8] * p.z + self.m[12];
+        let y = self.m[1] * p.x + self.m[5] * p.y + self.m[9] * p.z + self.m[13];
+        let z = self.m[2] * p.x + self.m[6] * p.y + self.m[10] * p.z + self.m[14];
+        let w = self.m[3] * p.x + self.m[7] * p.y + self.m[11] * p.z + self.m[15];
+
+        if w != 0.0 {
+            Vec3::new(x / w, y / w, z / w)
+        } else {
+            Vec3::new(x, y, z)
+        }
+    }
+
     pub fn as_ptr(&self) -> *const f32 {
         self.m.as_ptr()
     }
