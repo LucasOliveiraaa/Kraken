@@ -40,11 +40,16 @@ pub struct GlQuadNode {
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct GlVolume {
-    pub base_node_idx: u32,
-    pub _pad: [u32; 3], // 12-byte padding
+    pub base_node_idx: u32, // 4-bit
+    pub _pad: [u32; 3], // 12-bit
 
-    pub world_to_volume: [[f32; 4]; 4],
-    pub volume_to_world: [[f32; 4]; 4],
+    pub world_to_volume: [[f32; 4]; 4], // 16-bit
+    pub volume_to_world: [[f32; 4]; 4], // 16-bit
+
+    pub min_p: [f32; 3],
+    pub _pad2: f32,
+    pub max_p: [f32; 3],
+    pub _pad3: f32,
 }
 
 /// CPU-side scene description, prior to upload.

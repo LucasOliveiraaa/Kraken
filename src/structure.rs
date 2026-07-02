@@ -1,5 +1,6 @@
 use crate::{
-    kmath::{Mat4, Vec3}, scene::{GlPlane, GlQuadNode, GlVolume, SceneData},
+    kmath::{Mat4, Vec3},
+    scene::{GlPlane, GlQuadNode, GlVolume, SceneData},
 };
 
 pub struct PlaneDef {
@@ -40,7 +41,11 @@ impl MockSceneBuilder {
         size: Vec3,
         planes: Vec<PlaneDef>,
     ) -> Self {
-        let rotation = Vec3::new((rotation.x + 90.0).to_radians(), rotation.y.to_radians(), rotation.z.to_radians());
+        let rotation = Vec3::new(
+            (rotation.x + 90.0).to_radians(),
+            rotation.y.to_radians(),
+            rotation.z.to_radians(),
+        );
 
         let planes = planes
             .into_iter()
@@ -77,11 +82,37 @@ impl MockSceneBuilder {
 
         let first_node_idx = self.quad_nodes.len();
         let volume_to_world = Mat4::from_transform(position, rotation, size);
+
+        let corners = [
+            Vec3::new(-0.5, -0.5, -0.5),
+            Vec3::new(0.5, -0.5, -0.5),
+            Vec3::new(-0.5, 0.5, -0.5),
+            Vec3::new(0.5, 0.5, -0.5),
+            Vec3::new(-0.5, -0.5, 0.5),
+            Vec3::new(0.5, -0.5, 0.5),
+            Vec3::new(-0.5, 0.5, 0.5),
+            Vec3::new(0.5, 0.5, 0.5),
+        ];
+
+        let mut min_p = Vec3::splat(f32::INFINITY);
+        let mut max_p = Vec3::splat(f32::NEG_INFINITY);
+
+        for corner in corners {
+            let world = volume_to_world.transform_point3(corner);
+
+            min_p = min_p.min(world);
+            max_p = max_p.max(world);
+        }
+
         let volume = GlVolume {
             base_node_idx: first_node_idx as u32,
             _pad: [0; 3],
             world_to_volume: volume_to_world.inverse().into_cols_array_2d(),
             volume_to_world: volume_to_world.into_cols_array_2d(),
+            min_p: min_p.into_array(),
+            _pad2: 0.0,
+            max_p: max_p.into_array(),
+            _pad3: 0.0,
         };
 
         self.planes.extend(planes);
