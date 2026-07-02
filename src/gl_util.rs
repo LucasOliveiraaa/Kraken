@@ -88,7 +88,12 @@ pub unsafe fn create_empty_ssbo(size_bytes: isize, binding: u32, usage: GLenum) 
     let mut ssbo = 0u32;
     gl::GenBuffers(1, &mut ssbo);
     gl::BindBuffer(gl::SHADER_STORAGE_BUFFER, ssbo);
-    gl::BufferData(gl::SHADER_STORAGE_BUFFER, size_bytes, std::ptr::null(), usage);
+    gl::BufferData(
+        gl::SHADER_STORAGE_BUFFER,
+        size_bytes,
+        std::ptr::null(),
+        usage,
+    );
     gl::BindBufferBase(gl::SHADER_STORAGE_BUFFER, binding, ssbo);
     ssbo
 }
