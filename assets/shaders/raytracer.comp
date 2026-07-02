@@ -1,36 +1,29 @@
 #version 430
 
-layout(local_size_x = 16, local_size_y = 16) in;
+// ============================================
+//   DEBUG MACROS
+// ============================================
 
-layout(rgba32f, binding = 0) uniform image2D outputImage;
+#define DEBUG
 
-#define NOP
+#ifdef DEBUG
 
-// #define ATOMIC_ADD(a, b) NOP
-// #define INC(a) NOP
 #define ATOMIC_ADD(a, b) atomicAdd(a, b)
 #define INC(a) a++
 
-// These must be declared before the SSBOs below, since GLSL buffer blocks
-// reference them by name and (unlike C) there's no forward declaration.
-const uint INVALID_INDEX = 0xFFFFFFFFu;
-const float EPS = 1.19e-7;
-const uint EPS_CONSTANT = 10;
-const float T0 = 10.0;
-const float T1 = 100.0;
-const float PI = 3.14159265358979323846;
+#else
 
-struct Material {
-  vec3 albedo;   // Diffuse color
-  vec3 emission; // Light emitted by the surface
+#define NOP
+#define ATOMIC_ADD(a, b) NOP
+#define INC(a) NOP
 
-  float reflectivity; // 0 = diffuse, 1 = perfect mirror
-  float roughness;    // 0 = smooth, 1 = rough
-};
+#endif
 
-const Material defaultMaterial =
-    Material(vec3(0.8, 0.8, 0.8), vec3(0.0), 1.0, 0.0);
+// ============================================
+//   DATA STRUCTURES
+// ============================================
 
+// =======  Topology  =======
 struct Plane {
   float height, maxH, minH;
   uint firstCPIdx;
@@ -48,48 +41,86 @@ struct Volume {
   uint baseNodeIdx;
   mat4 worldToVolume;
   mat4 volumeToWorld;
+  vec3 minP, maxP;
 };
 
-// ---- ray ----
+// =======  Material  =======
+struct Material {
+  vec3 albedo;   // Diffuse color
+  vec3 emission; // Light emitted by the surface
+
+  float reflectivity; // 0 = diffuse, 1 = perfect mirror
+  float roughness;    // 0 = smooth, 1 = rough
+};
+
+// =======  Algorithm  =======
+struct Hit {
+  bool hit;
+
+  float t;
+
+  vec3 point;
+  vec3 normal;
+
+  Material material;
+};
+
 struct Ray {
   vec3 origin, direction;
 };
 
-// ---------------------------------------------------------------------
-// Uniforms & SSBOs
-// ---------------------------------------------------------------------
+struct Evaluation {
+  float height;
+  vec2 grad;
+};
 
-// ---- camera uniforms ----
+// ============================================
+//   CONSTANTS
+// ============================================
+
+const uint INVALID_INDEX = 0xFFFFFFFFu;
+const float EPS = 1.19e-7;
+const uint EPS_CONSTANT = 10;
+const float T0 = 10.0;
+const float T1 = 100.0;
+const float PI = 3.14159265358979323846;
+
+const Material defaultMaterial =
+    Material(vec3(0.8, 0.8, 0.8), vec3(0.0), 1.0, 0.0);
+    
+// ============================================
+//   BUFFERS
+// ============================================
+
+// =======  Camera  =======
 uniform mat4 invView;
 uniform mat4 invProj;
 uniform vec3 cameraPos;
 uniform vec2 resolution;
 
-// --- constants ----
-uniform uint volumeCount;
 
-// ---- frame/seed uniform (needed for per-pixel, per-frame RNG) ----
-// Bump this every frame (e.g. accumulated frame count) so successive
-// frames get decorrelated noise that you can temporally accumulate.
+// =======  Jitter/TAA  =======
 uniform sampler2D historyTex;
 uniform vec2 jitter; // sub-pixel offset in [-0.5, 0.5]
 uniform uint frameIndex;
 
-// ---- scene SSBOs ----
-layout(std430, binding = 1) buffer ControlPoints { float controlPoint[]; }
-controlPointBuffer;
-layout(std430, binding = 2) buffer Planes { Plane planes[]; }
-planeBuffer;
-layout(std430, binding = 3) buffer QuadTree { QuadNode nodes[]; }
-quadtreeBuffer;
-layout(std430, binding = 4) buffer Volumes { Volume volumes[]; }
-volumeBuffer;
+// =======  Topology  =======
+uniform uint volumeCount;
 
-// ---- profiling counters ----
-// Aggregated per-frame across every invocation via atomicAdd. Indices here
-// must match `profile_buffer::counters` on the Rust side. Cleared to zero
-// by the CPU before each draw call, then read back and pushed into Tracy
-// plots once the GPU is done writing.
+layout(std430, binding = 1)
+buffer ControlPoints { float controlPoint[]; } controlPointBuffer;
+
+layout(std430, binding = 2)
+buffer Planes { Plane planes[]; } planeBuffer;
+
+layout(std430, binding = 3)
+buffer QuadTree { QuadNode nodes[]; } quadtreeBuffer;
+
+layout(std430, binding = 4)
+buffer Volumes { Volume volumes[]; } volumeBuffer;
+
+// =======  Profile  =======
+
 #define COUNTER_NEWTON_ITERATIONS 0u
 #define COUNTER_PLANE_TESTS 1u
 #define COUNTER_QUAD_NODE_VISITS 2u
@@ -97,11 +128,6 @@ volumeBuffer;
 #define COUNTER_LIGHT_HITS 4u
 #define COUNTER_COUNT 5u
 
-layout(std430, binding = 5) buffer Profile { uint counters[COUNTER_COUNT]; }
-profileBuffer;
-
-// ---- render config (view mode etc.) ----
-// `viewMode` values must match `config_buffer::ViewMode` on the Rust side.
 #define VIEW_NORMAL 0u
 #define VIEW_NEWTON_ITERATIONS 1u
 #define VIEW_RAY_BOUNCES 2u
@@ -111,52 +137,48 @@ profileBuffer;
 #define VIEW_ROUGHNESS 6u
 #define VIEW_DEPTH 7u
 
-layout(std430, binding = 6) buffer Config {
+layout(std430, binding = 5)
+buffer Profile { uint counters[COUNTER_COUNT]; } profileBuffer;
+
+layout(std430, binding = 6)
+buffer Config {
   uint viewMode;
   float exposure;
   uint newtonMaxSteps;
   uint maxBounces;
-}
-configBuffer;
+} configBuffer;
 
-// ---------------------------------------------------------------------
-// RNG (PCG hash) + hemisphere sampling
-// ---------------------------------------------------------------------
-// Per-invocation RNG state, seeded once in main() from the pixel
-// coordinate and frameIndex so each pixel/frame gets an independent
-// stream of pseudo-random numbers.
+// ============================================
+//   RANDOM NUMBER GENERATION
+// ============================================
+
+// Per-invocation RNG state.
 uint rngState;
 
-// Per-invocation debug counters (plain globals, NOT atomics: each
-// fragment invocation gets its own copy, same as `rngState`). These track
-// this pixel's path totals for the heatmap-style debug views, in parallel
-// with the frame-aggregate atomics written into `profileBuffer`. Reset at
-// the top of main().
+// Per-invocation debug counters. Not atomic.
 uint dbgNewtonIters;
 uint dbgQuadVisits;
 
-// Per-invocation panic flag. If true, this pixel's path has gone off the rails.
-// This sets the pixel to red and stops further bounces, so you can see which
-// pixels are misbehaving.
-bool panic;
-
+// Generates a pseudo-random uint from a uint input.
 uint pcgHash(uint x) {
   uint state = x * 747796405u + 2891336453u;
   uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
   return (word >> 22u) ^ word;
 }
 
+// Seeds the RNG state for this pixel and frame. Should be called once per pixel per frame.
 void seedRng(uvec2 pixel, uint frame) {
   rngState = pixel.x * 1973u + pixel.y * 9277u + frame * 26699u + 1u;
   rngState = pcgHash(rngState);
 }
 
-// Returns a uniform float in [0, 1).
+// Generates a pseudo-random float in [0, 1).
 float randFloat() {
   rngState = pcgHash(rngState);
   return float(rngState) / 4294967296.0; // / 2^32
 }
 
+// Generates a pseudo-random vec2 with each component in [0, 1).
 vec2 randFloat2() { return vec2(randFloat(), randFloat()); }
 
 // Builds an orthonormal basis around `n` (assumed normalized).
@@ -184,14 +206,11 @@ vec3 randomHemisphere(vec3 normal) {
   return normalize(basis * vec3(x, y, z));
 }
 
-// ---------------------------------------------------------------------
-// Bicubic function evaluation
-// ---------------------------------------------------------------------
-struct FunctionEvaluation {
-  float height;
-  vec2 grad;
-};
+// ============================================
+//   EVALUATION
+// ============================================
 
+// =======  Basis  =======
 struct Basis {
   float b[3];
   float db[3];
@@ -214,7 +233,8 @@ Basis basis(float t) {
   return r;
 }
 
-FunctionEvaluation evalFunction(uint index, float x, float y, float T) {
+// =======  Evaluator  =======
+Evaluation evaluate(uint index, float x, float y) {
   Basis bx = basis(x);
   Basis by = basis(y);
 
@@ -231,85 +251,72 @@ FunctionEvaluation evalFunction(uint index, float x, float y, float T) {
     }
   }
 
-  return FunctionEvaluation(height, vec2(dx, dy));
+  return Evaluation(height, vec2(dx, dy));
 }
 
-// ---------------------------------------------------------------------
-// ISF / Newton root finding
-// ---------------------------------------------------------------------
+// ============================================
+//   ISF / NEWTON
+// ============================================
+
+struct NewtonStep {
+  float t, isf;
+  vec2 grad;
+};
+
 Ray normalizeRay(in Ray ray, vec3 origin, float size) {
   return Ray((ray.origin - origin) / size, ray.direction / size);
 }
 
-struct ISFEvaluation {
-  float isf, jacobian;
-  FunctionEvaluation eval;
-};
-
-ISFEvaluation evalISF(in Plane plane, Ray normRay, Ray origRay, float t,
-                      float T) {
+NewtonStep takeNewtonStep(in Plane plane, Ray normRay, Ray origRay, float t) {
   vec2 proj = normRay.origin.xy + normRay.direction.xy * t;
   float z = origRay.origin.z + origRay.direction.z * t;
-  FunctionEvaluation eval = evalFunction(plane.firstCPIdx, proj.x, proj.y, T);
+
+  Evaluation eval = evaluate(plane.firstCPIdx, proj.x, proj.y);
   float height = plane.height + eval.height;
+
   float isf = height - z;
   float jacobian = dot(eval.grad, normRay.direction.xy) - normRay.direction.z;
-  return ISFEvaluation(isf, jacobian, eval);
+
+  return NewtonStep(t - (isf / jacobian), isf, eval.grad);
 }
 
-struct NewtonStep {
-  float t, isf;
-  FunctionEvaluation eval;
-};
+// ============================================
+//   PLANE INTERSECTION
+// ============================================
 
-NewtonStep newtonStep(in Plane plane, Ray normRay, Ray origRay, float t,
-                      float T) {
-  ISFEvaluation eval = evalISF(plane, normRay, origRay, t, T);
-  return NewtonStep(t - (eval.isf / eval.jacobian), eval.isf, eval.eval);
-}
-
-// ---------------------------------------------------------------------
-// Plane / domain intersection
-// ---------------------------------------------------------------------
-struct Hit {
-  bool hit;
-
-  float t;
-
-  vec3 point;
-  vec3 normal;
-
-  Material material;
-};
-
-float evalEpsilon(float T) { return max(1e-5, float(EPS_CONSTANT) * EPS * T); }
+float getEpsilon(float T) { return max(1e-5, float(EPS_CONSTANT) * EPS * T); }
 
 Hit hitPlane(in QuadNode domain, in Plane plane, Ray ray, float accT, float T,
              float entryT, float exitT) {
   Ray normRay = normalizeRay(ray, vec3(domain.position, 0.0), domain.size);
-  float epsilon = evalEpsilon(T);
+  float epsilon = getEpsilon(T);
   float t = accT;
 
   for (uint i = 0u; i < configBuffer.newtonMaxSteps; i++) {
     ATOMIC_ADD(profileBuffer.counters[COUNTER_NEWTON_ITERATIONS], 1u);
     INC(dbgNewtonIters);
 
-    NewtonStep nStep = newtonStep(plane, normRay, ray, t, T + t);
-    if (abs(nStep.isf) <= epsilon) {
-      vec3 normal = normalize(vec3(-nStep.eval.grad.x / domain.size,
-                                   -nStep.eval.grad.y / domain.size, 1.0));
+    NewtonStep step = takeNewtonStep(plane, normRay, ray, t);
+    if (abs(step.isf) <= epsilon) {
+      vec3 normal = normalize(vec3(-step.grad.x / domain.size,
+                                   -step.grad.y / domain.size, 1.0));
 
       return Hit(true, t, ray.origin + ray.direction * t, normal,
                  defaultMaterial);
     }
-    t = nStep.t;
-    epsilon = evalEpsilon(T + t);
+    t = step.t;
+    epsilon = getEpsilon(T + t);
 
     if (t < entryT || t > exitT)
       break;
   }
+
   return Hit(false, 0.0, vec3(0.0), vec3(0.0), defaultMaterial);
 }
+
+// ============================================
+//   DOMAIN INTERSECTION
+// ============================================
 
 Hit hitDomain(in QuadNode domain, Ray ray, float T, float entryT, float exitT) {
   float entryZ = ray.origin.z + ray.direction.z * entryT;
@@ -339,6 +346,7 @@ Hit hitDomain(in QuadNode domain, Ray ray, float T, float entryT, float exitT) {
                              : (p.maxH - ray.origin.z) / ray.direction.z;
 
     float accT_plane = max(entryT, tEnterPlaneZ);
+
     Hit hit = hitPlane(domain, p, ray, accT_plane, T, entryT, exitT);
     if (hit.hit)
       return hit;
@@ -347,29 +355,38 @@ Hit hitDomain(in QuadNode domain, Ray ray, float T, float entryT, float exitT) {
   return Hit(false, 0.0, vec3(0.0), vec3(0.0), defaultMaterial);
 }
 
-// ---------------------------------------------------------------------
-// Quadtree traversal / volume intersection
-// ---------------------------------------------------------------------
+// ============================================
+//   QUADTREE TRAVERSAL
+// ============================================
+
 struct StackItem {
   uint nodeIdx;
   float tEntry, tExit;
 };
 
-bool intersectQuadXY(Ray ray, vec2 minP, vec2 maxP, float tMin, float tMax,
-                     out float entryT, out float exitT) {
+bool intersectQuadXY(
+  Ray ray, 
+  vec2 minP, 
+  vec2 maxP, 
+  float tMin, 
+  float tMax, 
+  out float entryT, 
+  out float exitT
+) {
   vec2 invDir = 1.0 / ray.direction.xy;
   vec2 t0 = (minP - ray.origin.xy) * invDir;
   vec2 t1 = (maxP - ray.origin.xy) * invDir;
+
   vec2 tmin2 = min(t0, t1);
   vec2 tmax2 = max(t0, t1);
+
   entryT = max(max(tmin2.x, tmin2.y), tMin);
   exitT = min(min(tmax2.x, tmax2.y), tMax);
+
   return entryT <= exitT;
 }
 
-Hit hitVolume(uint volumeIdx, Ray worldRay, float T, float tMin, float tMax) {
-  Volume vol = volumeBuffer.volumes[volumeIdx];
-
+Hit hitVolume(in Volume vol, Ray worldRay, float T, float tMin, float tMax) {
   Ray ray;
   ray.origin = (vol.worldToVolume * vec4(worldRay.origin, 1.0)).xyz;
   ray.direction = (vol.worldToVolume * vec4(worldRay.direction, 0.0)).xyz;
@@ -431,22 +448,10 @@ Hit hitVolume(uint volumeIdx, Ray worldRay, float T, float tMin, float tMax) {
   return Hit(false, 0.0, vec3(0.0), vec3(0.0), defaultMaterial);
 }
 
-Hit hitWorld(Ray worldRay, float T, float tMin, float tMax) {
-  Hit bestHit = Hit(false, 0.0, vec3(0.0), vec3(0.0), defaultMaterial);
+// ============================================
+//   LIGHTS
+// ============================================
 
-  for (uint i = 0u; i < volumeCount; i++) {
-    Hit hit = hitVolume(i, worldRay, T, tMin, tMax);
-    if (hit.hit && (!bestHit.hit || hit.t < bestHit.t)) {
-      bestHit = hit;
-    }
-  }
-
-  return bestHit;
-}
-
-// ---------------------------------------------------------------------
-// Lights & scene composition
-// ---------------------------------------------------------------------
 struct SphereLight {
   vec3 position;
   float radius;
@@ -504,6 +509,43 @@ Hit hitLights(Ray ray) {
   return best;
 }
 
+// ============================================
+//   WORLD TRAVERSAL
+// ============================================
+
+bool intersectAABB(Ray ray, vec3 a, vec3 b) {
+  vec3 invDir = 1.0 / ray.direction;
+
+  vec3 t0 = (a - ray.origin) * invDir;
+  vec3 t1 = (b - ray.origin) * invDir;
+
+  vec3 tMin = min(t0, t1);
+  vec3 tMax = max(t0, t1);
+
+  float tNear = max(max(tMin.x, tMin.y), tMin.z);
+  float tFar  = min(min(tMax.x, tMax.y), tMax.z);
+
+  return tFar >= max(tNear, 0.0);
+}
+
+Hit hitWorld(Ray worldRay, float T, float tMin, float tMax) {
+  Hit bestHit = Hit(false, 0.0, vec3(0.0), vec3(0.0), defaultMaterial);
+
+  for (uint i = 0u; i < volumeCount; i++) {
+    Volume volume = volumeBuffer.volumes[i];
+    
+    if (!intersectAABB(worldRay, volume.minP, volume.maxP))
+      continue;
+
+    Hit hit = hitVolume(volume, worldRay, T, tMin, tMax);
+    if (hit.hit && (!bestHit.hit || hit.t < bestHit.t)) {
+      bestHit = hit;
+    }
+  }
+
+  return bestHit;
+}
+
 Hit hitScene(Ray ray, float T, float tMin, float tMax) {
   Hit obj = hitWorld(ray, T, tMin, tMax);
 
@@ -522,18 +564,19 @@ Hit hitScene(Ray ray, float T, float tMin, float tMax) {
   return (obj.t < light.t) ? obj : light;
 }
 
-// ---------------------------------------------------------------------
-// Sky
-// ---------------------------------------------------------------------
+// ============================================
+//   SKY
+// ============================================
+
 vec3 skyGroundColor(vec3 dir) {
-  const vec3 skyColor = vec3(0.30, 0.45, 0.85);     // zenith
-  const vec3 horizonColor = vec3(0.70, 0.75, 0.90); // band at the horizon
-  const vec3 groundColor = vec3(0.10, 0.10, 0.10);  // nadir
+  const vec3 skyColor = vec3(0.30, 0.45, 0.85);
+  const vec3 horizonColor = vec3(0.70, 0.75, 0.90);
+  const vec3 groundColor = vec3(0.10, 0.10, 0.10);
 
   const float skyExponent = 0.4;    // lower = sky color spreads down further
   const float groundExponent = 0.4; // lower = ground color spreads up further
 
-  float t = dir.y; // -1 (straight down) .. 0 (horizon) .. 1 (straight up)
+  float t = dir.y;
 
   if (t >= 0.0)
     return mix(horizonColor, skyColor, pow(t, skyExponent));
@@ -541,12 +584,11 @@ vec3 skyGroundColor(vec3 dir) {
     return mix(horizonColor, groundColor, pow(-t, groundExponent));
 }
 
-// ---------------------------------------------------------------------
-// Debug view-mode helpers
-// ---------------------------------------------------------------------
-// Blue -> green -> red heatmap for visualizing per-pixel counters. `t`
-// should be pre-normalized to roughly [0, 1]; values above 1 simply clamp
-// to red rather than wrapping, so "too hot" is still visually obvious.
+// ============================================
+//   DEBUG VIEWS
+// ============================================
+
+// Blue -> green -> red heatmap for visualizing per-pixel counters.
 vec3 heatmap(float t) {
   t = clamp(t, 0.0, 1.0);
   vec3 cold = mix(vec3(0.0, 0.0, 1.0), vec3(0.0, 1.0, 0.0), min(1.0, t * 2.0));
@@ -558,9 +600,17 @@ vec3 heatmap(float t) {
 // Renders one of the non-photoreal debug views. Bypasses temporal
 // accumulation entirely -- these are meant to show this frame's raw data,
 // not a denoised average of it.
-vec3 debugView(uint mode, uint newtonIters, uint bounces, uint quadVisits,
-               bool hadFirstHit, vec3 firstNormal, vec3 firstAlbedo,
-               float firstRoughness, float firstDepth) {
+vec3 debugView(
+  uint mode, 
+  uint newtonIters, 
+  uint bounces, 
+  uint quadVisits,
+  bool hadFirstHit, 
+  vec3 firstNormal, 
+  vec3 firstAlbedo, 
+  float firstRoughness, 
+  float firstDepth
+) {
   if (mode == VIEW_NEWTON_ITERATIONS)
     return heatmap(float(newtonIters) / 40.0);
 
@@ -589,9 +639,13 @@ vec3 debugView(uint mode, uint newtonIters, uint bounces, uint quadVisits,
   return vec3(1.0, 0.0, 1.0); // magenta: unrecognized mode, easy to spot
 }
 
-// ---------------------------------------------------------------------
-// Main
-// ---------------------------------------------------------------------
+// ============================================
+//   MAIN RAYTRACING KERNEL
+// ============================================
+
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(rgba32f, binding = 0) uniform image2D outputImage;
+
 void main() {
   ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
 
@@ -602,7 +656,6 @@ void main() {
   seedRng(uvec2(pixel.xy), frameIndex);
   dbgNewtonIters = 0u;
   dbgQuadVisits = 0u;
-  panic = false;
 
   vec2 jitteredUV = (pixel.xy + jitter) / resolution;
   vec2 ndc = jitteredUV * 2.0 - 1.0;
