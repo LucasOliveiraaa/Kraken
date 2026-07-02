@@ -40,7 +40,7 @@ fn main() {
         fw.create_window(
             resolution.x as u32,
             resolution.y as u32,
-            "Kraken render test",
+            "Kraken GL COMP",
             WindowMode::Windowed,
         )
         .expect("Failed to create GLFW window")
@@ -123,7 +123,7 @@ fn main() {
         time_accum += dt as f64;
         if time_accum >= 1.0 {
             window.set_title(&format!(
-                "Kraken render test - FPS: {} - View: {}",
+                "Kraken GL COMP - FPS: {} - View: {}",
                 fps,
                 config.view_mode().label()
             ));
