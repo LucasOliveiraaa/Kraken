@@ -1,15 +1,15 @@
-use std::array;
 use num_traits::{Float, Num};
+use std::{array, fmt::{Debug, Display}, ops::Neg};
 
 use crate::matrix::Matrix;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq)]
 pub struct Vector<T: Num + Copy, const N: usize> {
     data: [T; N],
 }
 
 impl<T: Num + Copy, const N: usize> Vector<T, N> {
-    pub fn new(data: [T; N]) -> Self {
+    pub fn from_data(data: [T; N]) -> Self {
         Self { data }
     }
 
@@ -74,12 +74,28 @@ impl<T: Num + Copy, const N: usize> std::ops::Add for Vector<T, N> {
     }
 }
 
+impl<T: Num + Copy, const N: usize> std::ops::AddAssign for Vector<T, N> {
+    fn add_assign(&mut self, rhs: Self) {
+        for i in 0..N {
+            self.data[i] = self.data[i] + rhs.data[i];
+        }
+    }
+}
+
 impl<T: Num + Copy, const N: usize> std::ops::Sub for Vector<T, N> {
     type Output = Self;
 
     fn sub(self, rhs: Self) -> Self {
         Self {
             data: array::from_fn(|i| self.data[i] - rhs.data[i]),
+        }
+    }
+}
+
+impl<T: Num + Copy, const N: usize> std::ops::SubAssign for Vector<T, N> {
+    fn sub_assign(&mut self, rhs: Self) {
+        for i in 0..N {
+            self.data[i] = self.data[i] - rhs.data[i];
         }
     }
 }
@@ -134,7 +150,7 @@ impl<T: Num + Copy, const R: usize, const C: usize> std::ops::Mul<Matrix<T, R, C
     type Output = Vector<T, C>;
 
     fn mul(self, matrix: Matrix<T, R, C>) -> Self::Output {
-        Vector::new(std::array::from_fn(|col| {
+        Vector::from_data(std::array::from_fn(|col| {
             let mut sum = T::zero();
 
             for row in 0..R {
@@ -143,5 +159,77 @@ impl<T: Num + Copy, const R: usize, const C: usize> std::ops::Mul<Matrix<T, R, C
 
             sum
         }))
+    }
+}
+
+impl<T: Num + Copy + Debug, const N: usize> Debug for Vector<T, N> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_list()
+            .entries(self.data.iter())
+            .finish()
+    }
+}
+
+impl<T: Num + Copy> Vector<T, 2> {
+    pub fn new(x: T, y: T) -> Self {
+        Self { data: [x, y] }
+    }
+
+    pub fn x(&self) -> T {
+        self.data[0]
+    }
+
+    pub fn y(&self) -> T {
+        self.data[1]
+    }
+}
+
+impl<T: Num + Copy> Vector<T, 3> {
+    pub fn new(x: T, y: T, z: T) -> Self {
+        Self { data: [x, y, z] }
+    }
+
+    pub fn x(&self) -> T {
+        self.data[0]
+    }
+
+    pub fn y(&self) -> T {
+        self.data[1]
+    }
+
+    pub fn z(&self) -> T {
+        self.data[2]
+    }
+
+    pub fn cross(&self, other: &Self) -> Self {
+        Self {
+            data: [
+                self.y() * other.z() - self.z() * other.y(),
+                self.z() * other.x() - self.x() * other.z(),
+                self.x() * other.y() - self.y() * other.x(),
+            ],
+        }
+    }
+}
+
+impl<T: Num + Copy> Vector<T, 4> {
+    pub fn new(x: T, y: T, z: T, w: T) -> Self {
+        Self { data: [x, y, z, w] }
+    }
+
+    pub fn x(&self) -> T {
+        self.data[0]
+    }
+
+    pub fn y(&self) -> T {
+        self.data[1]
+    }
+
+    pub fn z(&self) -> T {
+        self.data[2]
+    }
+
+    pub fn w(&self) -> T {
+        self.data[3]
     }
 }
