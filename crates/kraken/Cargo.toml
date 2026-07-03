@@ -13,5 +13,6 @@ glow = { workspace = true }
 glutin = "0.32.3"
 glutin-winit = "0.5.0"
 raw-window-handle = "0.6.2"
-tracy-client = { version = "0.18.4", features = ["enable"] }
+tracy-client = { workspace = true }
 winit = "0.30.13"
+gl = { workspace = true }

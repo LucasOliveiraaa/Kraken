@@ -10,21 +10,26 @@ use glutin::prelude::*;
 use glutin::surface::SurfaceAttributesBuilder;
 use glutin::surface::{Surface, WindowSurface};
 use glutin_winit::DisplayBuilder;
-use kmath::Vec2f;
+use kmath::{Vec2f, Vec3f};
 use krender::Renderer;
 use raw_window_handle::HasWindowHandle;
+use std::collections::HashSet;
 use std::ffi::CString;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
-use winit::event::WindowEvent;
+use winit::event::{ElementState, WindowEvent};
+use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::Window;
 use winit::window::WindowAttributes;
 
-pub struct App {
-    renderer: Option<Renderer>,
+use crate::ui;
 
+pub struct App {
+    pub renderer: Option<Renderer>,
+
+    ui_state: ui::UiState,
     painter: Option<Painter>,
     egui_state: Option<State>,
     egui_ctx: EguiContext,
@@ -33,6 +38,10 @@ pub struct App {
     context: Option<PossiblyCurrentContext>,
     surface: Option<Surface<WindowSurface>>,
     window: Option<Window>,
+
+    pressed_keys: HashSet<KeyCode>,
+    pub camera_speed: f32,
+    pub camera_sensitivity: f32,
 }
 
 impl App {
@@ -40,6 +49,7 @@ impl App {
         Self {
             renderer: None,
 
+            ui_state: ui::UiState::new(),
             window: None,
             gl: None,
             context: None,
@@ -48,6 +58,10 @@ impl App {
             egui_ctx: EguiContext::default(),
             egui_state: None,
             painter: None,
+
+            pressed_keys: HashSet::new(),
+            camera_speed: 5.0,
+            camera_sensitivity: 0.5,
         }
     }
 }
@@ -101,6 +115,8 @@ impl ApplicationHandler for App {
 
         let context = not_current.make_current(&surface).unwrap();
 
+        gl::load_with(|s| display.get_proc_address(&CString::new(s).unwrap()).cast());
+
         let gl = unsafe {
             glow::Context::from_loader_function(|s| {
                 display.get_proc_address(&CString::new(s).unwrap())
@@ -127,13 +143,16 @@ impl ApplicationHandler for App {
         self.gl = Some(gl);
         self.painter = Some(painter);
         self.egui_state = Some(state);
-        self.renderer = Some(Renderer::new(
-            self.gl.as_ref().unwrap().clone(),
-            Vec2f::new(
-                self.window.as_ref().unwrap().inner_size().width as f32,
-                self.window.as_ref().unwrap().inner_size().height as f32,
-            ),
-        ));
+        self.renderer = Some(
+            Renderer::new(
+                self.gl.as_ref().unwrap().clone(),
+                Vec2f::new(
+                    self.window.as_ref().unwrap().inner_size().width as f32,
+                    self.window.as_ref().unwrap().inner_size().height as f32,
+                ),
+            )
+            .expect("Failed creating renderer"),
+        );
     }
 
     fn window_event(
@@ -176,6 +195,49 @@ impl ApplicationHandler for App {
             WindowEvent::RedrawRequested => {
                 let gl = self.gl.as_ref().unwrap();
 
+                let dt = self.renderer.as_ref().unwrap().delta_time();
+                let camera = self.renderer.as_mut().unwrap().camera_mut();
+
+                if self.pressed_keys.contains(&KeyCode::KeyW) {
+                    camera.move_towards(Vec3f::new(0.0, 0.0, -1.0) * dt);
+                }
+
+                if self.pressed_keys.contains(&KeyCode::KeyS) {
+                    camera.move_towards(Vec3f::new(0.0, 0.0, 1.0) * dt);
+                }
+
+                if self.pressed_keys.contains(&KeyCode::KeyA) {
+                    camera.move_towards(Vec3f::new(1.0, 0.0, 0.0) * dt);
+                }
+
+                if self.pressed_keys.contains(&KeyCode::KeyD) {
+                    camera.move_towards(Vec3f::new(-1.0, 0.0, 0.0) * dt);
+                }
+
+                if self.pressed_keys.contains(&KeyCode::KeyQ) {
+                    camera.move_towards(Vec3f::new(0.0, -1.0, 0.0) * dt);
+                }
+
+                if self.pressed_keys.contains(&KeyCode::KeyE) {
+                    camera.move_towards(Vec3f::new(0.0, 1.0, 0.0) * dt);
+                }
+
+                if self.pressed_keys.contains(&KeyCode::ArrowUp) {
+                    camera.rotate(Vec2f::new(0.0, 1.0) * self.camera_sensitivity * dt);
+                }
+
+                if self.pressed_keys.contains(&KeyCode::ArrowDown) {
+                    camera.rotate(Vec2f::new(0.0, -1.0) * self.camera_sensitivity * dt);
+                }
+
+                if self.pressed_keys.contains(&KeyCode::ArrowLeft) {
+                    camera.rotate(Vec2f::new(1.0, 0.0) * self.camera_sensitivity * dt);
+                }
+
+                if self.pressed_keys.contains(&KeyCode::ArrowRight) {
+                    camera.rotate(Vec2f::new(-1.0, 0.0) * self.camera_sensitivity * dt);
+                }
+
                 let raw_input = self
                     .egui_state
                     .as_mut()
@@ -183,11 +245,17 @@ impl ApplicationHandler for App {
                     .take_egui_input(self.window.as_ref().unwrap());
 
                 let full_output = self.egui_ctx.run_ui(raw_input, |ctx| {
-                    egui::Window::new("Hello").show(ctx, |ui| {
-                        ui.label("Hello from egui!");
-                        ui.button("Click me");
+                    egui::Window::new("Config").show(ctx, |ui| {
+                        self.ui_state
+                            .render_config(ui, self.renderer.as_mut().unwrap());
                     });
                 });
+                {
+                    self.ui_state
+                        .update_app(&mut self.camera_sensitivity, &mut self.camera_speed);
+                }
+                self.ui_state
+                    .update_renderer(self.renderer.as_mut().unwrap());
 
                 self.egui_state.as_mut().unwrap().handle_platform_output(
                     self.window.as_ref().unwrap(),
@@ -202,6 +270,17 @@ impl ApplicationHandler for App {
                     gl.clear_color(0.1, 0.2, 0.3, 1.0);
                     gl.clear(glow::COLOR_BUFFER_BIT);
 
+                    self.renderer.as_mut().unwrap().render();
+
+                    self.gl
+                        .as_ref()
+                        .unwrap()
+                        .bind_framebuffer(glow::FRAMEBUFFER, None);
+
+                    self.gl.as_ref().unwrap().disable(glow::BLEND);
+                    self.gl.as_ref().unwrap().disable(glow::DEPTH_TEST);
+                    self.gl.as_ref().unwrap().disable(glow::SCISSOR_TEST);
+                    self.gl.as_ref().unwrap().color_mask(true, true, true, true);
                     self.painter.as_mut().unwrap().paint_and_update_textures(
                         [
                             self.window.as_ref().unwrap().inner_size().width,
@@ -220,6 +299,36 @@ impl ApplicationHandler for App {
                     .unwrap();
             }
 
+            WindowEvent::MouseWheel { delta, .. } => {
+                if let Some(renderer) = &mut self.renderer {
+                    match delta {
+                        winit::event::MouseScrollDelta::LineDelta(_, y) => {
+                            let new_speed =
+                                renderer.camera_mut().speed - y * 0.01 * self.camera_speed;
+                            renderer.camera_mut().set_speed(new_speed);
+                        }
+                        winit::event::MouseScrollDelta::PixelDelta(pos) => {
+                            let new_speed = renderer.camera_mut().speed
+                                - pos.y as f32 * 0.01 * self.camera_speed;
+                            renderer.camera_mut().set_speed(new_speed);
+                        }
+                    }
+                }
+            }
+
+            WindowEvent::KeyboardInput { event, .. } => {
+                if let PhysicalKey::Code(key) = event.physical_key {
+                    match event.state {
+                        ElementState::Pressed => {
+                            self.pressed_keys.insert(key);
+                        }
+                        ElementState::Released => {
+                            self.pressed_keys.remove(&key);
+                        }
+                    }
+                }
+            }
+
             WindowEvent::CloseRequested => {
                 event_loop.exit();
             }
@@ -228,7 +337,7 @@ impl ApplicationHandler for App {
         }
     }
 
-    fn about_to_wait(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
+    fn about_to_wait(&mut self, _: &winit::event_loop::ActiveEventLoop) {
         if let Some(window) = &self.window {
             window.request_redraw();
         }
