@@ -1,16 +1,16 @@
 use std::sync::Arc;
 
 use glow::HasContext;
-use kmath::{Vec2f, Vec2i, Vec3f};
+use kmath::{Vec2f, Vec2i};
 
 use crate::{
     acc_buffer::AccBuffer,
     bindings,
     camera::Camera,
     config_buffer::ConfigBuffer,
+    gtw::{Gpu, Query, QueryTarget, Shader},
     profile_buffer::ProfileBuffer,
     scene::{SceneBuffers, build_mock_scene},
-    shader::Shader,
 };
 
 /// Radical-inverse Halton sequence, base `base`, 1-indexed (`halton(0, _)`
@@ -34,13 +34,11 @@ pub fn halton_jitter(frame_index: u32) -> Vec2f {
 }
 
 pub struct Renderer {
-    gl: Arc<glow::Context>,
+    gpu: Arc<Gpu>,
     resolution: Vec2f,
     shader: Shader,
 
     acc_buffer: AccBuffer,
-    camera: Camera,
-
     profile_buffer: ProfileBuffer,
     config_buffer: ConfigBuffer,
 
@@ -53,39 +51,26 @@ pub struct Renderer {
     time_acc: f32,
     frame_count: u32,
 
-    query: glow::NativeQuery,
+    elapsed_time_query: Query,
 }
 
 impl Renderer {
-    pub fn new(gl: Arc<glow::Context>, resolution: Vec2f) -> Result<Self, String> {
+    pub fn new(gpu: Arc<Gpu>, resolution: Vec2f) -> Result<Self, String> {
         let shader = unsafe {
-            Shader::from_file(gl.clone(), "assets/shaders/raytracer.comp")
+            Shader::from_file(gpu.clone(), "assets/shaders/tier0.comp")
                 .expect("Failed loading raytracer")
         };
 
         Ok(Self {
-            gl: gl.clone(),
+            gpu: gpu.clone(),
             resolution,
             shader,
 
-            acc_buffer: AccBuffer::new(
-                gl.clone(),
-                Vec2i::new(resolution.x() as i32, resolution.y() as i32),
-            )
-            .unwrap(),
-            camera: Camera::new(
-                Vec3f::new(0.0, 0.0, 0.0),
-                Vec3f::new(0.0, 0.0, 0.0),
-                resolution,
-                90.0,
-                0.1,
-                100.0,
-            ),
+            acc_buffer: AccBuffer::new(gpu.clone(), resolution.convert_to::<i32>()).unwrap(),
+            profile_buffer: unsafe { ProfileBuffer::new(gpu.clone(), bindings::PROFILE)? },
+            config_buffer: unsafe { ConfigBuffer::new(gpu.clone(), bindings::CONFIG)? },
 
-            profile_buffer: unsafe { ProfileBuffer::new(gl.clone(), bindings::PROFILE)? },
-            config_buffer: unsafe { ConfigBuffer::new(gl.clone(), bindings::CONFIG)? },
-
-            scene_buffers: unsafe { SceneBuffers::upload(gl.clone(), &build_mock_scene()) },
+            scene_buffers: unsafe { SceneBuffers::upload(gpu.clone(), &build_mock_scene()) },
 
             frame_index: 0,
             delta_time: 0.0,
@@ -94,7 +79,7 @@ impl Renderer {
             time_acc: 0.0,
             frame_count: 0,
 
-            query: unsafe { gl.create_query().expect("Failed to create query") },
+            elapsed_time_query: Query::new(gpu.clone(), QueryTarget::TimeElapsed)?,
         })
     }
 
@@ -104,13 +89,8 @@ impl Renderer {
             new_resolution.x() as i32,
             new_resolution.y() as i32,
         ))?;
-        self.camera.update_size(new_resolution);
 
         Ok(())
-    }
-
-    pub fn camera_mut(&mut self) -> &mut Camera {
-        &mut self.camera
     }
 
     pub fn delta_time(&self) -> f32 {
@@ -121,11 +101,14 @@ impl Renderer {
         self.fps
     }
 
+    pub fn config_buffer(&self) -> &ConfigBuffer {
+        &self.config_buffer
+    }
     pub fn config_buffer_mut(&mut self) -> &mut ConfigBuffer {
         &mut self.config_buffer
     }
 
-    pub fn render(&mut self) {
+    pub fn render(&mut self, camera: &mut Camera) {
         tracy_client::frame_mark();
         let _span = tracy_client::span!("Renderer::render");
 
@@ -143,20 +126,21 @@ impl Renderer {
             self.frame_count = 0;
         }
 
-        if self.camera.dirty || self.config_buffer.dirty {
+        if camera.dirty || self.config_buffer.dirty {
             self.frame_index = 0;
-            self.camera.dirty = false;
+            camera.dirty = false;
         }
         let jitter = halton_jitter(self.frame_index);
 
         unsafe {
-            self.gl.begin_query(glow::TIME_ELAPSED, self.query);
+            let gl = self.gpu.context();
+
+            self.elapsed_time_query.begin();
 
             let _span = tracy_client::span!("Render Pass");
 
             self.acc_buffer.bind_write_tex();
-            self.gl
-                .viewport(0, 0, self.resolution.x() as i32, self.resolution.y() as i32);
+            gl.viewport(0, 0, self.resolution.x() as i32, self.resolution.y() as i32);
 
             self.shader.use_program();
 
@@ -172,24 +156,24 @@ impl Renderer {
                 self.shader
                     .set_uniform_u32("volumeCount", self.scene_buffers.volumes_count());
 
+                let inv_view = camera.get_view_matrix().inverse().unwrap();
+                let inv_proj = camera.get_proj_matrix().inverse().unwrap();
+                self.shader.set_uniform_mat4f("invView", inv_view);
+                self.shader.set_uniform_mat4f("invProj", inv_proj);
                 self.shader
-                    .set_uniform_mat4f("invView", self.camera.get_view_matrix());
-                self.shader
-                    .set_uniform_mat4f("invProj", self.camera.get_proj_matrix());
-                self.shader
-                    .set_uniform_vec3f("cameraPos", self.camera.position());
+                    .set_uniform_vec3f("cameraPos", camera.transform().position);
                 self.shader.set_uniform_vec2f("resolution", self.resolution);
 
                 self.profile_buffer.begin_frame();
                 self.config_buffer.upload_if_dirty();
             }
 
-            self.gl.dispatch_compute(
+            gl.dispatch_compute(
                 (self.resolution.x() as u32 + 15) / 16,
                 (self.resolution.y() as u32 + 15) / 16,
                 1,
             );
-            self.gl.memory_barrier(
+            gl.memory_barrier(
                 glow::SHADER_IMAGE_ACCESS_BARRIER_BIT | glow::FRAMEBUFFER_BARRIER_BIT,
             );
 
@@ -198,7 +182,7 @@ impl Renderer {
             let _span = tracy_client::span!("Blit");
             self.acc_buffer.blit();
 
-            self.gl.end_query(glow::TIME_ELAPSED);
+            self.elapsed_time_query.end();
         }
 
         self.frame_index += 1;
@@ -207,13 +191,7 @@ impl Renderer {
         unsafe {
             self.profile_buffer.poll_and_report();
 
-            let available = self
-                .gl
-                .get_query_parameter_u32(self.query, glow::QUERY_RESULT_AVAILABLE);
-            if available != 0 {
-                let ns: u64 = self
-                    .gl
-                    .get_query_parameter_u64(self.query, gl::QUERY_RESULT);
+            if let Some(ns) = self.elapsed_time_query.get_u64() {
                 let ms = ns as f64 / 1_000_000.0;
                 tracy_client::plot!("GPU Time (ms)", ms);
             }

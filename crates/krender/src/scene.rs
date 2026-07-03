@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
 use glow::{HasContext, NativeBuffer};
-use kmath::{Mat4, Vec3f};
+use kmath::{Transform, Vec3f};
 
-use crate::bindings;
+use crate::{bindings, gtw::Gpu};
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
@@ -54,11 +54,12 @@ pub struct SceneData {
 /// `[-0.5, -0.5]..[0.5, 0.5]`, two overlapping planes, one volume rotated
 /// 90 degrees about X.
 pub fn build_mock_scene() -> SceneData {
-    let volume_to_world = Mat4::from_transform(
+    let volume_to_world = Transform::new(
         Vec3f::new(0.0, 0.0, 0.0),
         Vec3f::new(std::f32::consts::FRAC_PI_2, 0.0, 0.0),
         Vec3f::new(1.0, 1.0, 1.0),
-    );
+    )
+    .to_matrix();
 
     SceneData {
         control_points: vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
@@ -92,7 +93,7 @@ pub fn build_mock_scene() -> SceneData {
 
 /// GL buffer handles for an uploaded [`SceneData`].
 pub struct SceneBuffers {
-    gl: Arc<glow::Context>,
+    gpu: Arc<Gpu>,
 
     volumes_count: u32,
 
@@ -103,32 +104,34 @@ pub struct SceneBuffers {
 }
 
 impl SceneBuffers {
-    pub unsafe fn upload(gl: Arc<glow::Context>, data: &SceneData) -> Self {
-        fn upload_ssbo<T: Copy + Pod>(
-            gl: Arc<glow::Context>,
-            data: &[T],
-            binding: u32,
-        ) -> NativeBuffer {
-            let buffer = unsafe { gl.create_buffer().unwrap() };
+    pub unsafe fn upload(gpu: Arc<Gpu>, data: &SceneData) -> Self {
+        fn upload_ssbo<T: Copy + Pod>(gpu: Arc<Gpu>, data: &[T], binding: u32) -> NativeBuffer {
+            let buffer = unsafe { gpu.context().create_buffer().unwrap() };
             unsafe {
-                gl.bind_buffer(glow::SHADER_STORAGE_BUFFER, Some(buffer));
-                gl.buffer_data_u8_slice(
+                gpu.context()
+                    .bind_buffer(glow::SHADER_STORAGE_BUFFER, Some(buffer));
+                gpu.context().buffer_data_u8_slice(
                     glow::SHADER_STORAGE_BUFFER,
                     bytemuck::cast_slice(data),
                     glow::STATIC_DRAW,
                 );
-                gl.bind_buffer_base(glow::SHADER_STORAGE_BUFFER, binding, Some(buffer));
+                gpu.context()
+                    .bind_buffer_base(glow::SHADER_STORAGE_BUFFER, binding, Some(buffer));
             }
             buffer
         }
 
         Self {
-            gl: gl.clone(),
+            gpu: gpu.clone(),
             volumes_count: data.volumes.len() as u32,
-            control_points: upload_ssbo(gl.clone(), &data.control_points, bindings::CONTROL_POINTS),
-            planes: upload_ssbo(gl.clone(), &data.planes, bindings::PLANES),
-            quad_nodes: upload_ssbo(gl.clone(), &data.quad_nodes, bindings::QUAD_TREE),
-            volumes: upload_ssbo(gl.clone(), &data.volumes, bindings::VOLUMES),
+            control_points: upload_ssbo(
+                gpu.clone(),
+                &data.control_points,
+                bindings::CONTROL_POINTS,
+            ),
+            planes: upload_ssbo(gpu.clone(), &data.planes, bindings::PLANES),
+            quad_nodes: upload_ssbo(gpu.clone(), &data.quad_nodes, bindings::QUAD_TREE),
+            volumes: upload_ssbo(gpu.clone(), &data.volumes, bindings::VOLUMES),
         }
     }
 
@@ -140,10 +143,10 @@ impl SceneBuffers {
 impl Drop for SceneBuffers {
     fn drop(&mut self) {
         unsafe {
-            self.gl.delete_buffer(self.control_points);
-            self.gl.delete_buffer(self.planes);
-            self.gl.delete_buffer(self.quad_nodes);
-            self.gl.delete_buffer(self.volumes);
+            self.gpu.context().delete_buffer(self.control_points);
+            self.gpu.context().delete_buffer(self.planes);
+            self.gpu.context().delete_buffer(self.quad_nodes);
+            self.gpu.context().delete_buffer(self.volumes);
         }
     }
 }

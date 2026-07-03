@@ -1,9 +1,9 @@
-#![allow(unsafe_op_in_unsafe_fn)]
-
 use std::sync::Arc;
 
-use bytemuck::{bytes_of, Pod, Zeroable};
-use glow::{Context, HasContext};
+use bytemuck::{Pod, Zeroable, bytes_of};
+use glow::HasContext;
+
+use crate::gtw::Gpu;
 
 #[repr(u32)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -66,7 +66,7 @@ struct GlConfig {
 }
 
 pub struct ConfigBuffer {
-    gl: Arc<Context>,
+    gpu: Arc<Gpu>,
 
     ssbo: glow::NativeBuffer,
     binding: u32,
@@ -76,46 +76,43 @@ pub struct ConfigBuffer {
 }
 
 impl ConfigBuffer {
-    pub unsafe fn new(
-        gl: Arc<Context>,
-        binding: u32,
-    ) -> Result<Self, String> {
-        let data = GlConfig {
-            view_mode: ViewMode::Normal as u32,
-            exposure: 1.0,
-            newton_max_steps: 5,
-            max_bounces: 8,
-        };
+    pub unsafe fn new(gpu: Arc<Gpu>, binding: u32) -> Result<Self, String> {
+        unsafe {
+            let data = GlConfig {
+                view_mode: ViewMode::Normal as u32,
+                exposure: 1.0,
+                newton_max_steps: 5,
+                max_bounces: 8,
+            };
 
-        let ssbo = gl.create_buffer()?;
+            let gl = gpu.context();
 
-        gl.bind_buffer(glow::SHADER_STORAGE_BUFFER, Some(ssbo));
+            let ssbo = gl.create_buffer()?;
 
-        gl.buffer_data_size(
-            glow::SHADER_STORAGE_BUFFER,
-            std::mem::size_of::<GlConfig>() as i32,
-            glow::DYNAMIC_DRAW,
-        );
+            gl.bind_buffer(glow::SHADER_STORAGE_BUFFER, Some(ssbo));
 
-        gl.bind_buffer_base(
-            glow::SHADER_STORAGE_BUFFER,
-            binding,
-            Some(ssbo),
-        );
+            gl.buffer_data_size(
+                glow::SHADER_STORAGE_BUFFER,
+                std::mem::size_of::<GlConfig>() as i32,
+                glow::DYNAMIC_DRAW,
+            );
 
-        gl.bind_buffer(glow::SHADER_STORAGE_BUFFER, None);
+            gl.bind_buffer_base(glow::SHADER_STORAGE_BUFFER, binding, Some(ssbo));
 
-        let mut this = Self {
-            gl,
-            ssbo,
-            binding,
-            data,
-            dirty: true,
-        };
+            gl.bind_buffer(glow::SHADER_STORAGE_BUFFER, None);
 
-        this.upload_if_dirty();
+            let mut this = Self {
+                gpu,
+                ssbo,
+                binding,
+                data,
+                dirty: true,
+            };
 
-        Ok(this)
+            this.upload_if_dirty();
+
+            Ok(this)
+        }
     }
 
     pub fn view_mode(&self) -> ViewMode {
@@ -167,37 +164,38 @@ impl ConfigBuffer {
     }
 
     pub unsafe fn upload_if_dirty(&mut self) {
-        if !self.dirty {
-            return;
+        unsafe {
+            if !self.dirty {
+                return;
+            }
+
+            println!("Uploading config buffer: {:?}", self.data);
+
+            self.gpu
+                .context()
+                .bind_buffer(glow::SHADER_STORAGE_BUFFER, Some(self.ssbo));
+
+            self.gpu.context().buffer_sub_data_u8_slice(
+                glow::SHADER_STORAGE_BUFFER,
+                0,
+                bytes_of(&self.data),
+            );
+
+            self.gpu.context().bind_buffer_base(
+                glow::SHADER_STORAGE_BUFFER,
+                self.binding,
+                Some(self.ssbo),
+            );
+
+            self.dirty = false;
         }
-
-        println!("Uploading config buffer: {:?}", self.data);
-
-        self.gl.bind_buffer(
-            glow::SHADER_STORAGE_BUFFER,
-            Some(self.ssbo),
-        );
-
-        self.gl.buffer_sub_data_u8_slice(
-            glow::SHADER_STORAGE_BUFFER,
-            0,
-            bytes_of(&self.data),
-        );
-
-        self.gl.bind_buffer_base(
-            glow::SHADER_STORAGE_BUFFER,
-            self.binding,
-            Some(self.ssbo),
-        );
-
-        self.dirty = false;
     }
 }
 
 impl Drop for ConfigBuffer {
     fn drop(&mut self) {
         unsafe {
-            self.gl.delete_buffer(self.ssbo);
+            self.gpu.context().delete_buffer(self.ssbo);
         }
     }
 }
