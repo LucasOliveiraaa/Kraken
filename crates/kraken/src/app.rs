@@ -1,7 +1,3 @@
-use egui::Context as EguiContext;
-use egui_glow::Painter;
-use egui_winit::State;
-use glow::{Context, HasContext};
 use glutin::config::ConfigTemplateBuilder;
 use glutin::context::PossiblyCurrentContext;
 use glutin::context::{ContextApi, ContextAttributesBuilder};
@@ -10,58 +6,43 @@ use glutin::prelude::*;
 use glutin::surface::SurfaceAttributesBuilder;
 use glutin::surface::{Surface, WindowSurface};
 use glutin_winit::DisplayBuilder;
-use kmath::{Vec2f, Vec3f};
-use krender::Renderer;
+use kmath::Vec2f;
+use krender::gtw::Gpu;
 use raw_window_handle::HasWindowHandle;
-use std::collections::HashSet;
 use std::ffi::CString;
 use std::num::NonZeroU32;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
-use winit::event::{ElementState, WindowEvent};
-use winit::keyboard::{KeyCode, PhysicalKey};
+use winit::event::ElementState;
+use winit::keyboard::PhysicalKey;
 use winit::window::Window;
 use winit::window::WindowAttributes;
 
-use crate::ui;
+use crate::editor::{Editor, WindowEvent};
+use crate::egui::EguiState;
+use crate::viewport::Viewport;
 
 pub struct App {
-    pub renderer: Option<Renderer>,
+    editor: Option<Editor>,
 
-    ui_state: ui::UiState,
-    painter: Option<Painter>,
-    egui_state: Option<State>,
-    egui_ctx: EguiContext,
+    gpu: Option<Arc<Gpu>>,
 
-    gl: Option<Arc<Context>>,
     context: Option<PossiblyCurrentContext>,
     surface: Option<Surface<WindowSurface>>,
     window: Option<Window>,
-
-    pressed_keys: HashSet<KeyCode>,
-    pub camera_speed: f32,
-    pub camera_sensitivity: f32,
 }
 
 impl App {
     pub fn new() -> Self {
         Self {
-            renderer: None,
+            editor: None,
 
-            ui_state: ui::UiState::new(),
-            window: None,
-            gl: None,
+            gpu: None,
+
             context: None,
             surface: None,
-
-            egui_ctx: EguiContext::default(),
-            egui_state: None,
-            painter: None,
-
-            pressed_keys: HashSet::new(),
-            camera_speed: 5.0,
-            camera_sensitivity: 0.5,
+            window: None,
         }
     }
 }
@@ -122,37 +103,28 @@ impl ApplicationHandler for App {
                 display.get_proc_address(&CString::new(s).unwrap())
             })
         };
+        let gpu = Arc::new(Gpu::new(gl));
 
-        let gl = Arc::new(gl);
+        let viewport = Viewport::new(
+            gpu.clone(),
+            Vec2f::new(
+                window.inner_size().width as f32,
+                window.inner_size().height as f32,
+            ),
+        )
+        .expect("Failed creating viewport");
+        let viewport = Arc::new(RwLock::new(viewport));
 
-        let painter = egui_glow::Painter::new(gl.clone(), "", None, false)
-            .expect("Failed to create egui painter");
+        let egui_state = EguiState::new(gpu.clone(), event_loop, viewport.clone());
+        let egui_state = Arc::new(RwLock::new(egui_state));
 
-        let state = egui_winit::State::new(
-            self.egui_ctx.clone(),
-            egui::ViewportId::ROOT,
-            event_loop,
-            None,
-            None,
-            None,
-        );
+        self.editor = Some(Editor::new(egui_state, viewport));
+
+        self.gpu = Some(gpu);
 
         self.window = Some(window);
         self.surface = Some(surface);
         self.context = Some(context);
-        self.gl = Some(gl);
-        self.painter = Some(painter);
-        self.egui_state = Some(state);
-        self.renderer = Some(
-            Renderer::new(
-                self.gl.as_ref().unwrap().clone(),
-                Vec2f::new(
-                    self.window.as_ref().unwrap().inner_size().width as f32,
-                    self.window.as_ref().unwrap().inner_size().height as f32,
-                ),
-            )
-            .expect("Failed creating renderer"),
-        );
     }
 
     fn window_event(
@@ -165,132 +137,41 @@ impl ApplicationHandler for App {
             return;
         }
 
-        if let Some(state) = &mut self.egui_state {
-            let response = state.on_window_event(self.window.as_ref().unwrap(), &event);
-            if response.consumed {
-                return;
+        let Some(editor) = &mut self.editor else {
+            if matches!(event, winit::event::WindowEvent::CloseRequested) {
+                event_loop.exit();
             }
+
+            return;
+        };
+
+        if editor.egui_consume_window_event(self.window.as_ref().unwrap(), &event) {
+            return;
         }
 
         match event {
-            WindowEvent::Resized(size) => {
+            winit::event::WindowEvent::Resized(size) => {
                 self.surface.as_ref().unwrap().resize(
                     self.context.as_ref().unwrap(),
                     NonZeroU32::new(size.width.max(1)).unwrap(),
                     NonZeroU32::new(size.height.max(1)).unwrap(),
                 );
 
-                let scale = self.window.as_ref().unwrap().scale_factor();
+                let scale = self.window.as_ref().unwrap().scale_factor() as f32;
 
-                let width = (size.width as f64 * scale) as i32;
-                let height = (size.height as f64 * scale) as i32;
+                let width = size.width as f32 * scale;
+                let height = size.height as f32 * scale;
 
-                if let Some(renderer) = &mut self.renderer {
-                    renderer
-                        .resize(Vec2f::new(width as f32, height as f32))
-                        .expect("Failed to resize window");
-                }
+                editor
+                    .resize(Vec2f::new(width, height))
+                    .expect("Failed to resize window");
             }
 
-            WindowEvent::RedrawRequested => {
-                let gl = self.gl.as_ref().unwrap();
-
-                let dt = self.renderer.as_ref().unwrap().delta_time();
-                let camera = self.renderer.as_mut().unwrap().camera_mut();
-
-                if self.pressed_keys.contains(&KeyCode::KeyW) {
-                    camera.move_towards(Vec3f::new(0.0, 0.0, -1.0) * dt);
-                }
-
-                if self.pressed_keys.contains(&KeyCode::KeyS) {
-                    camera.move_towards(Vec3f::new(0.0, 0.0, 1.0) * dt);
-                }
-
-                if self.pressed_keys.contains(&KeyCode::KeyA) {
-                    camera.move_towards(Vec3f::new(1.0, 0.0, 0.0) * dt);
-                }
-
-                if self.pressed_keys.contains(&KeyCode::KeyD) {
-                    camera.move_towards(Vec3f::new(-1.0, 0.0, 0.0) * dt);
-                }
-
-                if self.pressed_keys.contains(&KeyCode::KeyQ) {
-                    camera.move_towards(Vec3f::new(0.0, -1.0, 0.0) * dt);
-                }
-
-                if self.pressed_keys.contains(&KeyCode::KeyE) {
-                    camera.move_towards(Vec3f::new(0.0, 1.0, 0.0) * dt);
-                }
-
-                if self.pressed_keys.contains(&KeyCode::ArrowUp) {
-                    camera.rotate(Vec2f::new(0.0, 1.0) * self.camera_sensitivity * dt);
-                }
-
-                if self.pressed_keys.contains(&KeyCode::ArrowDown) {
-                    camera.rotate(Vec2f::new(0.0, -1.0) * self.camera_sensitivity * dt);
-                }
-
-                if self.pressed_keys.contains(&KeyCode::ArrowLeft) {
-                    camera.rotate(Vec2f::new(1.0, 0.0) * self.camera_sensitivity * dt);
-                }
-
-                if self.pressed_keys.contains(&KeyCode::ArrowRight) {
-                    camera.rotate(Vec2f::new(-1.0, 0.0) * self.camera_sensitivity * dt);
-                }
-
-                let raw_input = self
-                    .egui_state
+            winit::event::WindowEvent::RedrawRequested => {
+                self.editor
                     .as_mut()
                     .unwrap()
-                    .take_egui_input(self.window.as_ref().unwrap());
-
-                let full_output = self.egui_ctx.run_ui(raw_input, |ctx| {
-                    egui::Window::new("Config").show(ctx, |ui| {
-                        self.ui_state
-                            .render_config(ui, self.renderer.as_mut().unwrap());
-                    });
-                });
-                {
-                    self.ui_state
-                        .update_app(&mut self.camera_sensitivity, &mut self.camera_speed);
-                }
-                self.ui_state
-                    .update_renderer(self.renderer.as_mut().unwrap());
-
-                self.egui_state.as_mut().unwrap().handle_platform_output(
-                    self.window.as_ref().unwrap(),
-                    full_output.platform_output,
-                );
-
-                let clipped_primitives = self
-                    .egui_ctx
-                    .tessellate(full_output.shapes, full_output.pixels_per_point);
-
-                unsafe {
-                    gl.clear_color(0.1, 0.2, 0.3, 1.0);
-                    gl.clear(glow::COLOR_BUFFER_BIT);
-
-                    self.renderer.as_mut().unwrap().render();
-
-                    self.gl
-                        .as_ref()
-                        .unwrap()
-                        .bind_framebuffer(glow::FRAMEBUFFER, None);
-
-                    self.gl.as_ref().unwrap().disable(glow::BLEND);
-                    self.gl.as_ref().unwrap().disable(glow::DEPTH_TEST);
-                    self.gl.as_ref().unwrap().disable(glow::SCISSOR_TEST);
-                    self.gl.as_ref().unwrap().color_mask(true, true, true, true);
-                    self.painter.as_mut().unwrap().paint_and_update_textures(
-                        [
-                            self.window.as_ref().unwrap().inner_size().width,
-                            self.window.as_ref().unwrap().inner_size().height,
-                        ],
-                        full_output.pixels_per_point,
-                        &clipped_primitives,
-                        &full_output.textures_delta,
-                    );
-                }
+                    .update(self.window.as_ref().unwrap());
 
                 self.surface
                     .as_ref()
@@ -299,40 +180,57 @@ impl ApplicationHandler for App {
                     .unwrap();
             }
 
-            WindowEvent::MouseWheel { delta, .. } => {
-                if let Some(renderer) = &mut self.renderer {
-                    match delta {
-                        winit::event::MouseScrollDelta::LineDelta(_, y) => {
-                            let new_speed =
-                                renderer.camera_mut().speed - y * 0.01 * self.camera_speed;
-                            renderer.camera_mut().set_speed(new_speed);
-                        }
-                        winit::event::MouseScrollDelta::PixelDelta(pos) => {
-                            let new_speed = renderer.camera_mut().speed
-                                - pos.y as f32 * 0.01 * self.camera_speed;
-                            renderer.camera_mut().set_speed(new_speed);
-                        }
-                    }
-                }
+            winit::event::WindowEvent::CursorMoved { position, .. } => {
+                let pos = Vec2f::new(position.x as f32, position.y as f32);
+
+                editor.handle_window_event(WindowEvent::MouseMove(pos));
             }
 
-            WindowEvent::KeyboardInput { event, .. } => {
+            winit::event::WindowEvent::MouseInput { state, button, .. } => {
+                let old_state = editor.mouse_state();
+
+                let left =
+                    button == winit::event::MouseButton::Left && state == ElementState::Pressed;
+                let middle =
+                    button == winit::event::MouseButton::Middle && state == ElementState::Pressed;
+                let right =
+                    button == winit::event::MouseButton::Right && state == ElementState::Pressed;
+
+                editor.handle_window_event(WindowEvent::MousePress {
+                    left: old_state.left_button_pressed || left,
+                    middle: old_state.middle_button_pressed || middle,
+                    right: old_state.right_button_pressed || right,
+                });
+            }
+
+            winit::event::WindowEvent::MouseWheel { delta, .. } => match delta {
+                winit::event::MouseScrollDelta::LineDelta(x, y) => {
+                    let delta = Vec2f::new(x, y);
+
+                    editor.handle_window_event(WindowEvent::MouseScroll(delta));
+                }
+                winit::event::MouseScrollDelta::PixelDelta(pos) => {
+                    let delta = Vec2f::new(pos.x as f32, pos.y as f32);
+
+                    editor.handle_window_event(WindowEvent::MouseScroll(delta));
+                }
+            },
+
+            winit::event::WindowEvent::KeyboardInput { event, .. } => {
                 if let PhysicalKey::Code(key) = event.physical_key {
                     match event.state {
                         ElementState::Pressed => {
-                            self.pressed_keys.insert(key);
+                            editor.handle_window_event(WindowEvent::KeyPress(key));
                         }
                         ElementState::Released => {
-                            self.pressed_keys.remove(&key);
+                            editor.handle_window_event(WindowEvent::KeyRelease(key));
                         }
                     }
                 }
             }
-
-            WindowEvent::CloseRequested => {
+            winit::event::WindowEvent::CloseRequested => {
                 event_loop.exit();
             }
-
             _ => {}
         }
     }
