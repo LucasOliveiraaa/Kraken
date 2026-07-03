@@ -780,7 +780,6 @@ void main() {
                        dbgQuadVisits, dbgHadFirstHit, dbgFirstNormal,
                        dbgFirstAlbedo, dbgFirstRoughness, dbgFirstDepth),
              1.0);
-    return;
   } else {
     vec3 history =
         texture(historyTex, uv).rgb; // unjittered uv, sampling last result
