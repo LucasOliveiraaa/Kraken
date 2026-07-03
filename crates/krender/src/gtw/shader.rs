@@ -3,9 +3,11 @@ use std::sync::Arc;
 use glow::HasContext;
 use kmath::{Mat4, Vec2f, Vec3f, Vec4f};
 
+use crate::gtw::Gpu;
+
 pub struct Shader {
-    gl: Arc<glow::Context>,
-    pub program: glow::Program,
+    gpu: Arc<Gpu>,
+    program: glow::Program,
 }
 
 unsafe fn compile_shader(
@@ -28,13 +30,15 @@ unsafe fn compile_shader(
 }
 
 impl Shader {
-    pub unsafe fn from_file(gl: Arc<glow::Context>, path: &str) -> Result<Self, String> {
+    pub unsafe fn from_file(gpu: Arc<Gpu>, path: &str) -> Result<Self, String> {
         let source = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-        unsafe { Self::new(gl, &source) }
+        unsafe { Self::new(gpu, &source) }
     }
 
-    pub unsafe fn new(gl: Arc<glow::Context>, source: &str) -> Result<Self, String> {
+    pub unsafe fn new(gpu: Arc<Gpu>, source: &str) -> Result<Self, String> {
         unsafe {
+            let gl = gpu.context();
+
             let program = gl.create_program().map_err(|e| e.to_string())?;
 
             let shader = compile_shader(&gl, glow::COMPUTE_SHADER, source)?;
@@ -49,75 +53,78 @@ impl Shader {
 
             gl.delete_shader(shader);
 
-            Ok(Self { gl, program })
+            Ok(Self { gpu, program })
         }
     }
 
     pub fn use_program(&self) {
         unsafe {
-            self.gl.use_program(Some(self.program));
+            self.gpu.context().use_program(Some(self.program));
         }
     }
 
     pub fn set_uniform_f32(&self, name: &str, value: f32) {
         unsafe {
-            let loc = self.gl.get_uniform_location(self.program, name);
+            let loc = self.gpu.context().get_uniform_location(self.program, name);
             if let Some(loc) = loc {
-                self.gl.uniform_1_f32(Some(&loc), value);
+                self.gpu.context().uniform_1_f32(Some(&loc), value);
             }
         }
     }
 
     pub fn set_uniform_vec2f(&self, name: &str, value: Vec2f) {
         unsafe {
-            let loc = self.gl.get_uniform_location(self.program, name);
+            let loc = self.gpu.context().get_uniform_location(self.program, name);
             if let Some(loc) = loc {
-                self.gl.uniform_2_f32(Some(&loc), value.x(), value.y());
+                self.gpu.context().uniform_2_f32(Some(&loc), value.x(), value.y());
             }
         }
     }
 
     pub fn set_uniform_vec3f(&self, name: &str, value: Vec3f) {
         unsafe {
-            let loc = self.gl.get_uniform_location(self.program, name);
+            let loc = self.gpu.context().get_uniform_location(self.program, name);
             if let Some(loc) = loc {
-                self.gl.uniform_3_f32(Some(&loc), value.x(), value.y(), value.z());
+                self.gpu.context()
+                    .uniform_3_f32(Some(&loc), value.x(), value.y(), value.z());
             }
         }
     }
 
     pub fn set_uniform_vec4f(&self, name: &str, value: Vec4f) {
         unsafe {
-            let loc = self.gl.get_uniform_location(self.program, name);
+            let loc = self.gpu.context().get_uniform_location(self.program, name);
             if let Some(loc) = loc {
-                self.gl.uniform_4_f32(Some(&loc), value.x(), value.y(), value.z(), value.w());
+                self.gpu.context()
+                    .uniform_4_f32(Some(&loc), value.x(), value.y(), value.z(), value.w());
             }
         }
     }
 
     pub fn set_uniform_i32(&self, name: &str, value: i32) {
         unsafe {
-            let loc = self.gl.get_uniform_location(self.program, name);
+            let loc = self.gpu.context().get_uniform_location(self.program, name);
             if let Some(loc) = loc {
-                self.gl.uniform_1_i32(Some(&loc), value);
+                self.gpu.context().uniform_1_i32(Some(&loc), value);
             }
         }
     }
 
     pub fn set_uniform_u32(&self, name: &str, value: u32) {
         unsafe {
-            let loc = self.gl.get_uniform_location(self.program, name);
+            let loc = self.gpu.context().get_uniform_location(self.program, name);
             if let Some(loc) = loc {
-                self.gl.uniform_1_u32(Some(&loc), value);
+                self.gpu.context().uniform_1_u32(Some(&loc), value);
             }
         }
     }
 
     pub fn set_uniform_mat4f(&self, name: &str, mat: Mat4<f32>) {
         unsafe {
-            let loc = self.gl.get_uniform_location(self.program, name);
+            let loc = self.gpu.context().get_uniform_location(self.program, name);
             if let Some(loc) = loc {
-                self.gl.uniform_matrix_4_f32_slice(Some(&loc), false, mat.as_flat_data());
+                self.gpu.context()
+                    .uniform_matrix_4_f32_slice(Some(&loc), false, mat.as_flat_data());
             }
         }
     }

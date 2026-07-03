@@ -1,9 +1,9 @@
+pub mod gtw;
 mod renderer;
-mod camera;
+pub mod camera;
 mod acc_buffer;
 pub mod config_buffer;
 pub mod profile_buffer;
-mod shader;
 mod bindings;
 pub mod scene;
 
