@@ -1,5 +1,9 @@
-use num_traits::{Float, Num};
-use std::{array, fmt::{Debug, Display}, ops::Neg};
+use num_traits::{Float, Num, NumCast};
+use std::{
+    array,
+    fmt::{Debug, Display},
+    ops::Neg,
+};
 
 use crate::matrix::Matrix;
 
@@ -43,6 +47,15 @@ impl<T: Num + Copy, const N: usize> Vector<T, N> {
 
     pub fn length_squared(&self) -> T {
         self.dot(self)
+    }
+
+    pub fn convert_to<U: NumCast + Num + Copy>(&self) -> Vector<U, N>
+    where
+        T: NumCast + Num + Copy,
+    {
+        Vector::from_data(std::array::from_fn(|i| {
+            NumCast::from(self.data[i]).unwrap()
+        }))
     }
 }
 
@@ -164,9 +177,7 @@ impl<T: Num + Copy, const R: usize, const C: usize> std::ops::Mul<Matrix<T, R, C
 
 impl<T: Num + Copy + Debug, const N: usize> Debug for Vector<T, N> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_list()
-            .entries(self.data.iter())
-            .finish()
+        f.debug_list().entries(self.data.iter()).finish()
     }
 }
 
@@ -181,6 +192,10 @@ impl<T: Num + Copy> Vector<T, 2> {
 
     pub fn y(&self) -> T {
         self.data[1]
+    }
+
+    pub fn extend(&self, z: T) -> Vector<T, 3> {
+        Vector::<T, 3>::new(self.x(), self.y(), z)
     }
 }
 
@@ -210,6 +225,14 @@ impl<T: Num + Copy> Vector<T, 3> {
             ],
         }
     }
+
+    pub fn extend(&self, w: T) -> Vector<T, 4> {
+        Vector::<T, 4>::new(self.x(), self.y(), self.z(), w)
+    }
+
+    pub fn truncate(&self) -> Vector<T, 2> {
+        Vector::<T, 2>::new(self.x(), self.y())
+    }
 }
 
 impl<T: Num + Copy> Vector<T, 4> {
@@ -231,5 +254,9 @@ impl<T: Num + Copy> Vector<T, 4> {
 
     pub fn w(&self) -> T {
         self.data[3]
+    }
+
+    pub fn truncate(&self) -> Vector<T, 3> {
+        Vector::<T, 3>::new(self.x(), self.y(), self.z())
     }
 }
