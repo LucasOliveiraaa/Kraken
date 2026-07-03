@@ -6,11 +6,11 @@ use kmath::Vec2i;
 pub struct AccBuffer {
     gl: Arc<glow::Context>,
 
-    read_fbo: glow::NativeFramebuffer,
     write_fbo: glow::NativeFramebuffer,
+    read_fbo: glow::NativeFramebuffer,
 
-    read_tex: glow::NativeTexture,
     write_tex: glow::NativeTexture,
+    read_tex: glow::NativeTexture,
 
     size: Vec2i,
 }
@@ -78,10 +78,10 @@ impl AccBuffer {
 
             Ok(Self {
                 gl,
-                read_fbo: fbo[0],
-                write_fbo: fbo[1],
-                read_tex: tex[0],
-                write_tex: tex[1],
+                write_fbo: fbo[0],
+                read_fbo: fbo[1],
+                write_tex: tex[0],
+                read_tex: tex[1],
                 size,
             })
         }
@@ -90,7 +90,14 @@ impl AccBuffer {
     pub fn resize(&mut self, new_size: Vec2i) -> Result<(), String> {
         unsafe {
             for i in 0..2 {
-                self.gl.bind_texture(glow::TEXTURE_2D, Some(if i == 0 { self.read_tex } else { self.write_tex }));
+                self.gl.bind_texture(
+                    glow::TEXTURE_2D,
+                    Some(if i == 0 {
+                        self.write_tex
+                    } else {
+                        self.read_tex
+                    }),
+                );
 
                 self.gl.tex_image_2d(
                     glow::TEXTURE_2D,
@@ -110,16 +117,66 @@ impl AccBuffer {
 
         Ok(())
     }
+
+    pub fn swap(&mut self) {
+        std::mem::swap(&mut self.read_tex, &mut self.write_tex);
+        std::mem::swap(&mut self.read_fbo, &mut self.write_fbo);
+    }
+
+    pub fn bind_write_tex(&self) {
+        unsafe {
+            self.gl.bind_image_texture(
+                0,
+                Some(self.write_tex),
+                0,
+                false,
+                0,
+                glow::WRITE_ONLY,
+                glow::RGBA32F,
+            );
+        }
+    }
+
+    pub fn bind_read_tex(&self, unit: u32) {
+        unsafe {
+            self.gl.active_texture(glow::TEXTURE0 + unit);
+            self.gl.bind_texture(glow::TEXTURE_2D, Some(self.read_tex));
+        }
+    }
+
+    pub fn blit(&self) {
+        unsafe {
+            self.gl
+                .bind_framebuffer(glow::READ_FRAMEBUFFER, Some(self.read_fbo));
+            self.gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, None);
+
+            self.gl.blit_framebuffer(
+                0,
+                0,
+                self.size.x(),
+                self.size.y(),
+                0,
+                0,
+                self.size.x(),
+                self.size.y(),
+                glow::COLOR_BUFFER_BIT,
+                glow::NEAREST,
+            );
+
+        self.gl.bind_framebuffer(glow::READ_FRAMEBUFFER, None);
+        self.gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, None);
+        }
+    }
 }
 
 impl Drop for AccBuffer {
     fn drop(&mut self) {
         unsafe {
-            self.gl.delete_framebuffer(self.read_fbo);
             self.gl.delete_framebuffer(self.write_fbo);
+            self.gl.delete_framebuffer(self.read_fbo);
 
-            self.gl.delete_texture(self.read_tex);
             self.gl.delete_texture(self.write_tex);
+            self.gl.delete_texture(self.read_tex);
         }
     }
 }
