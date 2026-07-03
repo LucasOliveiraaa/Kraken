@@ -6,3 +6,6 @@ edition = "2024"
 [dependencies]
 kmath = { path = "../kmath" }
 glow = { workspace = true }
+tracy-client = { workspace = true }
+bytemuck = "1.25.0"
+gl = { workspace = true }
