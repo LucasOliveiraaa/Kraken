@@ -2,10 +2,7 @@ mod matrix;
 mod vector;
 mod transform;
 
-use std::ops::{Deref, DerefMut};
-
 pub use matrix::Matrix;
-use num_traits::{Float, Num};
 pub use vector::Vector;
 
 pub use transform::Transform;

@@ -1,9 +1,5 @@
 use num_traits::{Float, Num, NumCast};
-use std::{
-    array,
-    fmt::{Debug, Display},
-    ops::Neg,
-};
+use std::{array, fmt::Debug};
 
 use crate::matrix::Matrix;
 
