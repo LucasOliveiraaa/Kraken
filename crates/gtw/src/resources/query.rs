@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use glow::HasContext;
 
-use crate::gtw::Gpu;
+use crate::Gpu;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum QueryTarget {

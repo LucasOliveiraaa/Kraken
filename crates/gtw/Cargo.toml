@@ -1,0 +1,11 @@
+[package]
+name = "gtw"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+kmath = { path = "../kmath" }
+glow = { workspace = true }
+gl = { workspace = true }
+bytemuck = { workspace = true }
+bitflags = "2.13.0"

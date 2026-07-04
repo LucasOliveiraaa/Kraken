@@ -3,7 +3,7 @@ use std::sync::Arc;
 use glow::HasContext;
 use kmath::{Mat4, Vec2f, Vec3f, Vec4f};
 
-use crate::gtw::Gpu;
+use crate::Gpu;
 
 pub struct Shader {
     gpu: Arc<Gpu>,
@@ -76,7 +76,9 @@ impl Shader {
         unsafe {
             let loc = self.gpu.context().get_uniform_location(self.program, name);
             if let Some(loc) = loc {
-                self.gpu.context().uniform_2_f32(Some(&loc), value.x(), value.y());
+                self.gpu
+                    .context()
+                    .uniform_2_f32(Some(&loc), value.x(), value.y());
             }
         }
     }
@@ -85,7 +87,8 @@ impl Shader {
         unsafe {
             let loc = self.gpu.context().get_uniform_location(self.program, name);
             if let Some(loc) = loc {
-                self.gpu.context()
+                self.gpu
+                    .context()
                     .uniform_3_f32(Some(&loc), value.x(), value.y(), value.z());
             }
         }
@@ -95,8 +98,13 @@ impl Shader {
         unsafe {
             let loc = self.gpu.context().get_uniform_location(self.program, name);
             if let Some(loc) = loc {
-                self.gpu.context()
-                    .uniform_4_f32(Some(&loc), value.x(), value.y(), value.z(), value.w());
+                self.gpu.context().uniform_4_f32(
+                    Some(&loc),
+                    value.x(),
+                    value.y(),
+                    value.z(),
+                    value.w(),
+                );
             }
         }
     }
@@ -123,8 +131,11 @@ impl Shader {
         unsafe {
             let loc = self.gpu.context().get_uniform_location(self.program, name);
             if let Some(loc) = loc {
-                self.gpu.context()
-                    .uniform_matrix_4_f32_slice(Some(&loc), false, mat.as_flat_data());
+                self.gpu.context().uniform_matrix_4_f32_slice(
+                    Some(&loc),
+                    false,
+                    mat.as_flat_data(),
+                );
             }
         }
     }
