@@ -1,10 +1,13 @@
 use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
-use glow::{HasContext, NativeBuffer};
 use kmath::{Transform, Vec3f};
 
-use crate::{bindings, gtw::Gpu};
+use crate::bindings;
+use gtw::{
+    Gpu,
+    resources::{Buffer, BufferDesc, BufferTarget, BufferUsage},
+};
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
@@ -97,56 +100,47 @@ pub struct SceneBuffers {
 
     volumes_count: u32,
 
-    control_points: NativeBuffer,
-    planes: NativeBuffer,
-    quad_nodes: NativeBuffer,
-    volumes: NativeBuffer,
+    control_points: Buffer,
+    planes: Buffer,
+    quad_nodes: Buffer,
+    volumes: Buffer,
 }
 
 impl SceneBuffers {
-    pub unsafe fn upload(gpu: Arc<Gpu>, data: &SceneData) -> Self {
-        fn upload_ssbo<T: Copy + Pod>(gpu: Arc<Gpu>, data: &[T], binding: u32) -> NativeBuffer {
-            let buffer = unsafe { gpu.context().create_buffer().unwrap() };
-            unsafe {
-                gpu.context()
-                    .bind_buffer(glow::SHADER_STORAGE_BUFFER, Some(buffer));
-                gpu.context().buffer_data_u8_slice(
-                    glow::SHADER_STORAGE_BUFFER,
-                    bytemuck::cast_slice(data),
-                    glow::STATIC_DRAW,
-                );
-                gpu.context()
-                    .bind_buffer_base(glow::SHADER_STORAGE_BUFFER, binding, Some(buffer));
-            }
-            buffer
+    pub fn upload(gpu: Arc<Gpu>, data: &SceneData) -> Result<Self, String> {
+        fn upload_ssbo<T: Copy + Pod>(
+            gpu: Arc<Gpu>,
+            data: &[T],
+            binding: u32,
+        ) -> Result<Buffer, String> {
+            let buffer = Buffer::new_with_data(
+                gpu.clone(),
+                data,
+                BufferDesc {
+                    size: 0,
+                    target: BufferTarget::ShaderStorageBuffer,
+                    usage: BufferUsage::DynamicDraw,
+                },
+            )?;
+            buffer.bind_base(binding);
+            Ok(buffer)
         }
 
-        Self {
+        Ok(Self {
             gpu: gpu.clone(),
             volumes_count: data.volumes.len() as u32,
             control_points: upload_ssbo(
                 gpu.clone(),
                 &data.control_points,
                 bindings::CONTROL_POINTS,
-            ),
-            planes: upload_ssbo(gpu.clone(), &data.planes, bindings::PLANES),
-            quad_nodes: upload_ssbo(gpu.clone(), &data.quad_nodes, bindings::QUAD_TREE),
-            volumes: upload_ssbo(gpu.clone(), &data.volumes, bindings::VOLUMES),
-        }
+            )?,
+            planes: upload_ssbo(gpu.clone(), &data.planes, bindings::PLANES)?,
+            quad_nodes: upload_ssbo(gpu.clone(), &data.quad_nodes, bindings::QUAD_TREE)?,
+            volumes: upload_ssbo(gpu.clone(), &data.volumes, bindings::VOLUMES)?,
+        })
     }
 
     pub fn volumes_count(&self) -> u32 {
         self.volumes_count
-    }
-}
-
-impl Drop for SceneBuffers {
-    fn drop(&mut self) {
-        unsafe {
-            self.gpu.context().delete_buffer(self.control_points);
-            self.gpu.context().delete_buffer(self.planes);
-            self.gpu.context().delete_buffer(self.quad_nodes);
-            self.gpu.context().delete_buffer(self.volumes);
-        }
     }
 }

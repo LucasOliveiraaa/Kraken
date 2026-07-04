@@ -1,125 +1,79 @@
 use std::sync::Arc;
 
-use glow::HasContext;
-use kmath::Vec2i;
+use kmath::Vec2u;
 
-use crate::gtw::Gpu;
+use gtw::{
+    BlitRegion, BlitTarget, Gpu, present::Framebuffer, resources::{
+        FilterMode, ImageAccess, Sampler, SamplerDesc, Texture, TextureDesc, TextureFormat,
+        TextureKind, WrapMode,
+    },
+};
 
 pub struct AccBuffer {
     gpu: Arc<Gpu>,
 
-    write_fbo: glow::NativeFramebuffer,
-    read_fbo: glow::NativeFramebuffer,
+    write_fbo: Framebuffer,
+    read_fbo: Framebuffer,
 
-    write_tex: glow::NativeTexture,
-    read_tex: glow::NativeTexture,
+    write_tex: Arc<Texture>,
+    read_tex: Arc<Texture>,
+    sampler: Sampler,
 
-    size: Vec2i,
+    size: Vec2u,
 }
 
 impl AccBuffer {
-    pub fn new(gpu: Arc<Gpu>, size: Vec2i) -> Result<Self, String> {
-        unsafe {
-            let gl = gpu.context();
+    pub fn new(gpu: Arc<Gpu>, size: Vec2u) -> Result<Self, String> {
+        let write_tex = Arc::new(Texture::new(
+            gpu.clone(),
+            TextureDesc {
+                kind: TextureKind::Texture2D,
+                format: TextureFormat::RGBA32F,
+                size: size.extend(1),
+                mip_levels: 1,
+            },
+        )?);
 
-            let fbo = [gl.create_framebuffer()?, gl.create_framebuffer()?];
+        let read_tex = Arc::new(Texture::new(
+            gpu.clone(),
+            TextureDesc {
+                kind: TextureKind::Texture2D,
+                format: TextureFormat::RGBA32F,
+                size: size.extend(1),
+                mip_levels: 1,
+            },
+        )?);
 
-            let tex = [gl.create_texture()?, gl.create_texture()?];
+        let sampler = Sampler::new(
+            gpu.clone(),
+            &SamplerDesc {
+                min_filter: FilterMode::Nearest,
+                mag_filter: FilterMode::Nearest,
+                wrap_u: WrapMode::ClampToEdge,
+                wrap_v: WrapMode::ClampToEdge,
+                ..Default::default()
+            },
+        )?;
 
-            for i in 0..2 {
-                gl.bind_texture(glow::TEXTURE_2D, Some(tex[i]));
+        let mut write_fbo = Framebuffer::new(gpu.clone())?;
+        write_fbo.attach_texture(
+            gtw::present::Attachment::Color(0),
+            Arc::clone(&write_tex),
+            0,
+        )?;
 
-                gl.tex_image_2d(
-                    glow::TEXTURE_2D,
-                    0,
-                    glow::RGBA32F as i32,
-                    size.x(),
-                    size.y(),
-                    0,
-                    glow::RGBA,
-                    glow::FLOAT,
-                    glow::PixelUnpackData::Slice(None),
-                );
+        let mut read_fbo = Framebuffer::new(gpu.clone())?;
+        read_fbo.attach_texture(gtw::present::Attachment::Color(0), Arc::clone(&read_tex), 0)?;
 
-                gl.tex_parameter_i32(
-                    glow::TEXTURE_2D,
-                    glow::TEXTURE_MIN_FILTER,
-                    glow::NEAREST as i32,
-                );
-                gl.tex_parameter_i32(
-                    glow::TEXTURE_2D,
-                    glow::TEXTURE_MAG_FILTER,
-                    glow::NEAREST as i32,
-                );
-
-                gl.tex_parameter_i32(
-                    glow::TEXTURE_2D,
-                    glow::TEXTURE_WRAP_S,
-                    glow::CLAMP_TO_EDGE as i32,
-                );
-                gl.tex_parameter_i32(
-                    glow::TEXTURE_2D,
-                    glow::TEXTURE_WRAP_T,
-                    glow::CLAMP_TO_EDGE as i32,
-                );
-
-                gl.bind_framebuffer(glow::FRAMEBUFFER, Some(fbo[i]));
-
-                gl.framebuffer_texture_2d(
-                    glow::FRAMEBUFFER,
-                    glow::COLOR_ATTACHMENT0,
-                    glow::TEXTURE_2D,
-                    Some(tex[i]),
-                    0,
-                );
-
-                if gl.check_framebuffer_status(glow::FRAMEBUFFER) != glow::FRAMEBUFFER_COMPLETE {
-                    return Err(format!("Framebuffer {} is incomplete", i));
-                }
-            }
-
-            gl.bind_framebuffer(glow::FRAMEBUFFER, None);
-
-            Ok(Self {
-                gpu,
-                write_fbo: fbo[0],
-                read_fbo: fbo[1],
-                write_tex: tex[0],
-                read_tex: tex[1],
-                size,
-            })
-        }
-    }
-
-    pub fn resize(&mut self, new_size: Vec2i) -> Result<(), String> {
-        unsafe {
-            for i in 0..2 {
-                self.gpu.context().bind_texture(
-                    glow::TEXTURE_2D,
-                    Some(if i == 0 {
-                        self.write_tex
-                    } else {
-                        self.read_tex
-                    }),
-                );
-
-                self.gpu.context().tex_image_2d(
-                    glow::TEXTURE_2D,
-                    0,
-                    glow::RGBA32F as i32,
-                    new_size.x(),
-                    new_size.y(),
-                    0,
-                    glow::RGBA,
-                    glow::FLOAT,
-                    glow::PixelUnpackData::Slice(None),
-                );
-            }
-        }
-
-        self.size = new_size;
-
-        Ok(())
+        Ok(Self {
+            gpu,
+            write_fbo,
+            read_fbo,
+            write_tex,
+            read_tex,
+            sampler,
+            size,
+        })
     }
 
     pub fn swap(&mut self) {
@@ -128,59 +82,26 @@ impl AccBuffer {
     }
 
     pub fn bind_write_tex(&self) {
-        unsafe {
-            self.gpu.context().bind_image_texture(
-                0,
-                Some(self.write_tex),
-                0,
-                false,
-                0,
-                glow::WRITE_ONLY,
-                glow::RGBA32F,
-            );
-        }
+        self.write_tex.bind_image(0, ImageAccess::WriteOnly);
     }
 
     pub fn bind_read_tex(&self, unit: u32) {
-        unsafe {
-            self.gpu.context().active_texture(glow::TEXTURE0 + unit);
-            self.gpu.context().bind_texture(glow::TEXTURE_2D, Some(self.read_tex));
-        }
+        self.read_tex.bind(unit);
+        self.sampler.bind(unit);
     }
 
     pub fn blit(&self) {
-        unsafe {
-            self.gpu.context()
-                .bind_framebuffer(glow::READ_FRAMEBUFFER, Some(self.read_fbo));
-            self.gpu.context().bind_framebuffer(glow::DRAW_FRAMEBUFFER, None);
-
-            self.gpu.context().blit_framebuffer(
-                0,
-                0,
-                self.size.x(),
-                self.size.y(),
-                0,
-                0,
-                self.size.x(),
-                self.size.y(),
-                glow::COLOR_BUFFER_BIT,
-                glow::NEAREST,
-            );
-
-            self.gpu.context().bind_framebuffer(glow::READ_FRAMEBUFFER, None);
-            self.gpu.context().bind_framebuffer(glow::DRAW_FRAMEBUFFER, None);
-        }
-    }
-}
-
-impl Drop for AccBuffer {
-    fn drop(&mut self) {
-        unsafe {
-            self.gpu.context().delete_framebuffer(self.write_fbo);
-            self.gpu.context().delete_framebuffer(self.read_fbo);
-
-            self.gpu.context().delete_texture(self.write_tex);
-            self.gpu.context().delete_texture(self.read_tex);
-        }
+        self.gpu.blit(
+            &self.read_fbo,
+            BlitTarget::Screen,
+            BlitRegion {
+                src_pos: Vec2u::new(0, 0),
+                src_size: self.size,
+                dst_pos: Vec2u::new(0, 0),
+                dst_size: self.size,
+            },
+            gtw::BlitMask::Color,
+            gtw::BlitFilter::Nearest,
+        );
     }
 }

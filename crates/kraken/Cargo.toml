@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 kmath = { path = "../kmath" }
 krender = { path = "../krender" }
+gtw = { path = "../gtw" }
 egui = "0.35.0"
 egui-winit = "0.35.0"
 egui_glow = "0.35.0"
@@ -15,4 +16,3 @@ glutin-winit = "0.5.0"
 raw-window-handle = "0.6.2"
 tracy-client = { workspace = true }
 winit = "0.30.13"
-gl = { workspace = true }

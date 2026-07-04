@@ -1,8 +1,8 @@
 [workspace]
-members = ["crates/kraken", "crates/kmath", "crates/krender"]
+members = ["crates/kraken", "crates/kmath", "crates/krender", "crates/gtw"]
 resolver = "3"
 
 [workspace.dependencies]
 glow = "0.17.0"
 tracy-client = { version = "0.18.4", features = ["enable"] }
-gl = "0.14.0"
+bytemuck = "1.25.0"

@@ -6,8 +6,8 @@ use glutin::prelude::*;
 use glutin::surface::SurfaceAttributesBuilder;
 use glutin::surface::{Surface, WindowSurface};
 use glutin_winit::DisplayBuilder;
+use gtw::Gpu;
 use kmath::Vec2f;
-use krender::gtw::Gpu;
 use raw_window_handle::HasWindowHandle;
 use std::ffi::CString;
 use std::num::NonZeroU32;
@@ -95,8 +95,6 @@ impl ApplicationHandler for App {
         let surface = unsafe { display.create_window_surface(&gl_config, &attrs).unwrap() };
 
         let context = not_current.make_current(&surface).unwrap();
-
-        gl::load_with(|s| display.get_proc_address(&CString::new(s).unwrap()).cast());
 
         let gl = unsafe {
             glow::Context::from_loader_function(|s| {

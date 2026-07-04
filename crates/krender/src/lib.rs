@@ -1,4 +1,3 @@
-pub mod gtw;
 mod renderer;
 pub mod camera;
 mod acc_buffer;

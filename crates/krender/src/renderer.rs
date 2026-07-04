@@ -1,16 +1,19 @@
 use std::sync::Arc;
 
-use glow::HasContext;
-use kmath::{Vec2f, Vec2i};
+use kmath::{Vec2f, Vec2u};
 
 use crate::{
     acc_buffer::AccBuffer,
     bindings,
     camera::Camera,
     config_buffer::ConfigBuffer,
-    gtw::{Gpu, Query, QueryTarget, Shader},
     profile_buffer::ProfileBuffer,
     scene::{SceneBuffers, build_mock_scene},
+};
+
+use gtw::{
+    Gpu, MemoryBarrier,
+    resources::{Query, QueryTarget, Shader},
 };
 
 /// Radical-inverse Halton sequence, base `base`, 1-indexed (`halton(0, _)`
@@ -66,11 +69,11 @@ impl Renderer {
             resolution,
             shader,
 
-            acc_buffer: AccBuffer::new(gpu.clone(), resolution.convert_to::<i32>()).unwrap(),
-            profile_buffer: unsafe { ProfileBuffer::new(gpu.clone(), bindings::PROFILE)? },
-            config_buffer: unsafe { ConfigBuffer::new(gpu.clone(), bindings::CONFIG)? },
+            acc_buffer: AccBuffer::new(gpu.clone(), resolution.convert_to::<u32>()).unwrap(),
+            profile_buffer: ProfileBuffer::new(gpu.clone(), bindings::PROFILE)?,
+            config_buffer: ConfigBuffer::new(gpu.clone(), bindings::CONFIG)?,
 
-            scene_buffers: unsafe { SceneBuffers::upload(gpu.clone(), &build_mock_scene()) },
+            scene_buffers: SceneBuffers::upload(gpu.clone(), &build_mock_scene())?,
 
             frame_index: 0,
             delta_time: 0.0,
@@ -85,10 +88,7 @@ impl Renderer {
 
     pub fn resize(&mut self, new_resolution: Vec2f) -> Result<(), String> {
         self.resolution = new_resolution;
-        self.acc_buffer.resize(Vec2i::new(
-            new_resolution.x() as i32,
-            new_resolution.y() as i32,
-        ))?;
+        self.acc_buffer = AccBuffer::new(self.gpu.clone(), new_resolution.convert_to::<u32>())?;
 
         Ok(())
     }
@@ -132,69 +132,64 @@ impl Renderer {
         }
         let jitter = halton_jitter(self.frame_index);
 
-        unsafe {
-            let gl = self.gpu.context();
+        self.elapsed_time_query.begin();
 
-            self.elapsed_time_query.begin();
+        let _span = tracy_client::span!("Render Pass");
 
-            let _span = tracy_client::span!("Render Pass");
+        self.acc_buffer.bind_write_tex();
+        self.gpu
+            .viewport(Vec2u::new(0, 0), self.resolution.convert_to::<u32>());
 
-            self.acc_buffer.bind_write_tex();
-            gl.viewport(0, 0, self.resolution.x() as i32, self.resolution.y() as i32);
+        self.shader.use_program();
 
-            self.shader.use_program();
+        {
+            let _span = tracy_client::span!("Buffer Binding");
 
-            {
-                let _span = tracy_client::span!("Buffer Binding");
+            self.acc_buffer.bind_read_tex(0);
 
-                self.acc_buffer.bind_read_tex(0);
+            self.shader.set_uniform_i32("historyTex", 0);
+            self.shader.set_uniform_u32("frameIndex", self.frame_index);
 
-                self.shader.set_uniform_i32("historyTex", 0);
-                self.shader.set_uniform_u32("frameIndex", self.frame_index);
+            self.shader.set_uniform_vec2f("jitter", jitter);
+            self.shader
+                .set_uniform_u32("volumeCount", self.scene_buffers.volumes_count());
 
-                self.shader.set_uniform_vec2f("jitter", jitter);
-                self.shader
-                    .set_uniform_u32("volumeCount", self.scene_buffers.volumes_count());
+            let inv_view = camera.get_view_matrix().inverse().unwrap();
+            let inv_proj = camera.get_proj_matrix().inverse().unwrap();
+            self.shader.set_uniform_mat4f("invView", inv_view);
+            self.shader.set_uniform_mat4f("invProj", inv_proj);
+            self.shader
+                .set_uniform_vec3f("cameraPos", camera.transform().position);
+            self.shader.set_uniform_vec2f("resolution", self.resolution);
 
-                let inv_view = camera.get_view_matrix().inverse().unwrap();
-                let inv_proj = camera.get_proj_matrix().inverse().unwrap();
-                self.shader.set_uniform_mat4f("invView", inv_view);
-                self.shader.set_uniform_mat4f("invProj", inv_proj);
-                self.shader
-                    .set_uniform_vec3f("cameraPos", camera.transform().position);
-                self.shader.set_uniform_vec2f("resolution", self.resolution);
-
-                self.profile_buffer.begin_frame();
-                self.config_buffer.upload_if_dirty();
-            }
-
-            gl.dispatch_compute(
-                (self.resolution.x() as u32 + 15) / 16,
-                (self.resolution.y() as u32 + 15) / 16,
-                1,
-            );
-            gl.memory_barrier(
-                glow::SHADER_IMAGE_ACCESS_BARRIER_BIT | glow::FRAMEBUFFER_BARRIER_BIT,
-            );
-
-            self.profile_buffer.end_frame();
-
-            let _span = tracy_client::span!("Blit");
-            self.acc_buffer.blit();
-
-            self.elapsed_time_query.end();
+            self.profile_buffer.begin_frame();
+            self.config_buffer.upload_if_dirty();
         }
+
+        self.gpu.dispatch_compute(
+            (self.resolution.x() as u32 + 15) / 16,
+            (self.resolution.y() as u32 + 15) / 16,
+            1,
+        );
+        self.gpu.memory_barrier(
+            MemoryBarrier::SHADER_IMAGE_ACCESS_BARRIER | MemoryBarrier::FRAMEBUFFER_BARRIER,
+        );
+
+        self.profile_buffer.end_frame().expect("Failed ending profile frame");
+
+        let _span = tracy_client::span!("Blit");
+        self.acc_buffer.blit();
+
+        self.elapsed_time_query.end();
 
         self.frame_index += 1;
         self.acc_buffer.swap();
 
-        unsafe {
-            self.profile_buffer.poll_and_report();
+        self.profile_buffer.poll_and_report();
 
-            if let Some(ns) = self.elapsed_time_query.get_u64() {
-                let ms = ns as f64 / 1_000_000.0;
-                tracy_client::plot!("GPU Time (ms)", ms);
-            }
+        if let Some(ns) = self.elapsed_time_query.get_u64() {
+            let ms = ns as f64 / 1_000_000.0;
+            tracy_client::plot!("GPU Time (ms)", ms);
         }
     }
 }

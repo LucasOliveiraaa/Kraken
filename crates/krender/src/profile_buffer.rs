@@ -1,9 +1,10 @@
 use std::sync::Arc;
 
-use gl::types::GLsync;
-use glow::HasContext;
-
-use crate::gtw::Gpu;
+use gtw::{
+    Gpu,
+    resources::{Buffer, BufferDesc, BufferTarget, BufferUsage},
+    sync::Fence,
+};
 
 /// Counter indices, mirrored in the shader.
 pub mod counters {
@@ -20,131 +21,84 @@ const BYTES: i32 = (counters::COUNT * std::mem::size_of::<u32>()) as i32;
 pub struct ProfileBuffer {
     gpu: Arc<Gpu>,
 
-    ssbo: [glow::NativeBuffer; 2],
-    fence: [Option<GLsync>; 2],
+    ssbo: [Buffer; 2],
+    fence: [Option<Fence>; 2],
 
     write_idx: usize,
     binding: u32,
 }
 
 impl ProfileBuffer {
-    pub unsafe fn new(gpu: Arc<Gpu>, binding: u32) -> Result<Self, String> {
-        unsafe {
-            let gl = gpu.context();
+    pub fn new(gpu: Arc<Gpu>, binding: u32) -> Result<Self, String> {
+        let ssbo1 = Buffer::new(
+            gpu.clone(),
+            BufferDesc {
+                size: BYTES as usize,
+                target: BufferTarget::ShaderStorageBuffer,
+                usage: BufferUsage::DynamicCopy,
+            },
+        )?;
+        let ssbo2 = Buffer::new(
+            gpu.clone(),
+            BufferDesc {
+                size: BYTES as usize,
+                target: BufferTarget::ShaderStorageBuffer,
+                usage: BufferUsage::DynamicCopy,
+            },
+        )?;
 
-            let ssbo = [gl.create_buffer()?, gl.create_buffer()?];
-
-            for &buffer in &ssbo {
-                gl.bind_buffer(glow::SHADER_STORAGE_BUFFER, Some(buffer));
-
-                gl.buffer_data_size(glow::SHADER_STORAGE_BUFFER, BYTES, glow::DYNAMIC_COPY);
-            }
-
-            gl.bind_buffer(glow::SHADER_STORAGE_BUFFER, None);
-
-            Ok(Self {
-                gpu,
-                ssbo,
-                fence: [None, None],
-                write_idx: 0,
-                binding,
-            })
-        }
+        Ok(Self {
+            gpu,
+            ssbo: [ssbo1, ssbo2],
+            fence: [None, None],
+            write_idx: 0,
+            binding,
+        })
     }
 
-    pub unsafe fn begin_frame(&mut self) {
-        unsafe {
-            let idx = self.write_idx;
+    pub fn begin_frame(&mut self) {
+        let idx = self.write_idx;
 
-            let zeros = [0u32; counters::COUNT];
+        let zeros = [0u32; counters::COUNT];
 
-            self.gpu
-                .context()
-                .bind_buffer(glow::SHADER_STORAGE_BUFFER, Some(self.ssbo[idx]));
+        self.ssbo[idx].upload_data(0, &zeros);
+        self.ssbo[idx].bind_base(self.binding);
+    }
 
-            self.gpu.context().buffer_sub_data_u8_slice(
-                glow::SHADER_STORAGE_BUFFER,
-                0,
-                bytemuck::cast_slice(&zeros),
+    pub fn end_frame(&mut self) -> Result<(), String> {
+        let idx = self.write_idx;
+
+        if let Some(sync) = self.fence[idx].take() {
+            drop(sync);
+        }
+
+        self.fence[idx] = Some(Fence::new(self.gpu.clone())?);
+        self.write_idx ^= 1;
+
+        Ok(())
+    }
+
+    pub fn poll_and_report(&mut self) {
+        for idx in 0..2 {
+            let Some(sync) = self.fence[idx].take() else {
+                continue;
+            };
+
+            if sync.wait_client(false, Some(0)).is_err() {
+                continue;
+            }
+
+            let mut data = [0u32; counters::COUNT];
+            self.ssbo[idx].download_data(0, &mut data);
+
+            tracy_client::plot!(
+                "Newton Iterations",
+                data[counters::NEWTON_ITERATIONS] as f64
             );
-
-            self.gpu.context().bind_buffer_base(
-                glow::SHADER_STORAGE_BUFFER,
-                self.binding,
-                Some(self.ssbo[idx]),
-            );
-        }
-    }
-
-    pub unsafe fn end_frame(&mut self) {
-        unsafe {
-            let idx = self.write_idx;
-
-            if let Some(sync) = self.fence[idx].take() {
-                gl::DeleteSync(sync);
-            }
-
-            self.fence[idx] = Some(gl::FenceSync(gl::SYNC_GPU_COMMANDS_COMPLETE, 0));
-
-            self.write_idx ^= 1;
-        }
-    }
-
-    pub unsafe fn poll_and_report(&mut self) {
-        unsafe {
-            for idx in 0..2 {
-                let Some(sync) = self.fence[idx] else {
-                    continue;
-                };
-
-                let status = gl::ClientWaitSync(sync, 0, 0);
-
-                if status != gl::ALREADY_SIGNALED && status != gl::CONDITION_SATISFIED {
-                    continue;
-                }
-
-                let mut data = [0u32; counters::COUNT];
-
-                self.gpu
-                    .context()
-                    .bind_buffer(glow::SHADER_STORAGE_BUFFER, Some(self.ssbo[idx]));
-
-                self.gpu.context().get_buffer_sub_data(
-                    glow::SHADER_STORAGE_BUFFER,
-                    0,
-                    bytemuck::cast_slice_mut(&mut data),
-                );
-
-                tracy_client::plot!(
-                    "Newton Iterations",
-                    data[counters::NEWTON_ITERATIONS] as f64
-                );
-
-                tracy_client::plot!("Plane Tests", data[counters::PLANE_TESTS] as f64);
-
-                tracy_client::plot!("Quad Node Visits", data[counters::QUAD_NODE_VISITS] as f64);
-
-                tracy_client::plot!("Ray Bounces", data[counters::RAY_BOUNCES] as f64);
-
-                tracy_client::plot!("Light Hits", data[counters::LIGHT_HITS] as f64);
-
-                gl::DeleteSync(sync);
-                self.fence[idx] = None;
-            }
-        }
-    }
-}
-
-impl Drop for ProfileBuffer {
-    fn drop(&mut self) {
-        unsafe {
-            for sync in self.fence.iter().flatten() {
-                gl::DeleteSync(*sync);
-            }
-
-            for buffer in self.ssbo {
-                self.gpu.context().delete_buffer(buffer);
-            }
+            tracy_client::plot!("Plane Tests", data[counters::PLANE_TESTS] as f64);
+            tracy_client::plot!("Quad Node Visits", data[counters::QUAD_NODE_VISITS] as f64);
+            tracy_client::plot!("Ray Bounces", data[counters::RAY_BOUNCES] as f64);
+            tracy_client::plot!("Light Hits", data[counters::LIGHT_HITS] as f64);
         }
     }
 }

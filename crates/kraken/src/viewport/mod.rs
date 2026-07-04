@@ -4,8 +4,9 @@ pub use camera::*;
 
 use std::{collections::HashSet, sync::Arc};
 
+use gtw::Gpu;
 use kmath::{Transform, Vec2f, Vec3f};
-use krender::{Renderer, config_buffer::ConfigBuffer, gtw::Gpu};
+use krender::{Renderer, config_buffer::ConfigBuffer};
 use winit::keyboard::KeyCode;
 
 use crate::editor::MouseState;
@@ -82,7 +83,7 @@ impl Viewport {
         if pressed_keys.contains(&KeyCode::KeyD) {
             self.camera.move_towards(Vec3f::new(-1.0, 0.0, 0.0) * dt);
         }
-        
+
         if pressed_keys.contains(&KeyCode::KeyQ) {
             self.camera.move_towards(Vec3f::new(0.0, -1.0, 0.0) * dt);
         }

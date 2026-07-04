@@ -1,9 +1,11 @@
 use std::sync::Arc;
 
-use bytemuck::{Pod, Zeroable, bytes_of};
-use glow::HasContext;
+use bytemuck::{Pod, Zeroable};
 
-use crate::gtw::Gpu;
+use gtw::{
+    Gpu,
+    resources::{Buffer, BufferDesc, BufferTarget, BufferUsage},
+};
 
 #[repr(u32)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -68,7 +70,7 @@ struct GlConfig {
 pub struct ConfigBuffer {
     gpu: Arc<Gpu>,
 
-    ssbo: glow::NativeBuffer,
+    ssbo: Buffer,
     binding: u32,
 
     data: GlConfig,
@@ -76,43 +78,33 @@ pub struct ConfigBuffer {
 }
 
 impl ConfigBuffer {
-    pub unsafe fn new(gpu: Arc<Gpu>, binding: u32) -> Result<Self, String> {
-        unsafe {
-            let data = GlConfig {
-                view_mode: ViewMode::Normal as u32,
-                exposure: 1.0,
-                newton_max_steps: 5,
-                max_bounces: 8,
-            };
+    pub fn new(gpu: Arc<Gpu>, binding: u32) -> Result<Self, String> {
+        let data = GlConfig {
+            view_mode: ViewMode::Normal as u32,
+            exposure: 1.0,
+            newton_max_steps: 5,
+            max_bounces: 8,
+        };
 
-            let gl = gpu.context();
+        let ssbo = Buffer::new_with_data(
+            gpu.clone(),
+            &[data],
+            BufferDesc {
+                size: 0,
+                target: BufferTarget::ShaderStorageBuffer,
+                usage: BufferUsage::DynamicDraw,
+            },
+        )?;
 
-            let ssbo = gl.create_buffer()?;
+        ssbo.bind_base(binding);
 
-            gl.bind_buffer(glow::SHADER_STORAGE_BUFFER, Some(ssbo));
-
-            gl.buffer_data_size(
-                glow::SHADER_STORAGE_BUFFER,
-                std::mem::size_of::<GlConfig>() as i32,
-                glow::DYNAMIC_DRAW,
-            );
-
-            gl.bind_buffer_base(glow::SHADER_STORAGE_BUFFER, binding, Some(ssbo));
-
-            gl.bind_buffer(glow::SHADER_STORAGE_BUFFER, None);
-
-            let mut this = Self {
-                gpu,
-                ssbo,
-                binding,
-                data,
-                dirty: true,
-            };
-
-            this.upload_if_dirty();
-
-            Ok(this)
-        }
+        Ok(Self {
+            gpu,
+            ssbo,
+            binding,
+            data,
+            dirty: false,
+        })
     }
 
     pub fn view_mode(&self) -> ViewMode {
@@ -163,39 +155,16 @@ impl ConfigBuffer {
         self.set_view_mode(self.view_mode().next());
     }
 
-    pub unsafe fn upload_if_dirty(&mut self) {
-        unsafe {
-            if !self.dirty {
-                return;
-            }
-
-            println!("Uploading config buffer: {:?}", self.data);
-
-            self.gpu
-                .context()
-                .bind_buffer(glow::SHADER_STORAGE_BUFFER, Some(self.ssbo));
-
-            self.gpu.context().buffer_sub_data_u8_slice(
-                glow::SHADER_STORAGE_BUFFER,
-                0,
-                bytes_of(&self.data),
-            );
-
-            self.gpu.context().bind_buffer_base(
-                glow::SHADER_STORAGE_BUFFER,
-                self.binding,
-                Some(self.ssbo),
-            );
-
-            self.dirty = false;
+    pub fn upload_if_dirty(&mut self) {
+        if !self.dirty {
+            return;
         }
-    }
-}
 
-impl Drop for ConfigBuffer {
-    fn drop(&mut self) {
-        unsafe {
-            self.gpu.context().delete_buffer(self.ssbo);
-        }
+        println!("Uploading config buffer: {:?}", self.data);
+
+        self.ssbo.upload_data(0, &[self.data]);
+        self.ssbo.bind_base(self.binding);
+
+        self.dirty = false;
     }
 }

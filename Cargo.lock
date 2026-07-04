@@ -840,6 +840,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "gtw"
+version = "0.1.0"
+dependencies = [
+ "bitflags 2.13.0",
+ "bytemuck",
+ "gl",
+ "glow",
+ "kmath",
+]
+
+[[package]]
 name = "guillotiere"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1121,10 +1132,10 @@ dependencies = [
  "egui",
  "egui-winit",
  "egui_glow",
- "gl",
  "glow",
  "glutin",
  "glutin-winit",
+ "gtw",
  "kmath",
  "krender",
  "raw-window-handle",
@@ -1137,8 +1148,7 @@ name = "krender"
 version = "0.1.0"
 dependencies = [
  "bytemuck",
- "gl",
- "glow",
+ "gtw",
  "kmath",
  "tracy-client",
 ]
