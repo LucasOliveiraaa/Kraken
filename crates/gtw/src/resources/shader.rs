@@ -30,12 +30,12 @@ unsafe fn compile_shader(
 }
 
 impl Shader {
-    pub unsafe fn from_file(gpu: Arc<Gpu>, path: &str) -> Result<Self, String> {
+    pub fn from_file(gpu: Arc<Gpu>, path: &str) -> Result<Self, String> {
         let source = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-        unsafe { Self::new(gpu, &source) }
+        Self::new(gpu, &source)
     }
 
-    pub unsafe fn new(gpu: Arc<Gpu>, source: &str) -> Result<Self, String> {
+    pub fn new(gpu: Arc<Gpu>, source: &str) -> Result<Self, String> {
         unsafe {
             let gl = gpu.context();
 

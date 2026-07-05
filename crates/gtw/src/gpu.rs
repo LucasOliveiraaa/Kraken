@@ -88,7 +88,7 @@ impl Gpu {
         }
     }
 
-    pub unsafe fn context(&self) -> Arc<GpuContext> {
+    pub fn context(&self) -> Arc<GpuContext> {
         Arc::clone(&self.context)
     }
 

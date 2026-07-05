@@ -59,10 +59,8 @@ pub struct Renderer {
 
 impl Renderer {
     pub fn new(gpu: Arc<Gpu>, resolution: Vec2f) -> Result<Self, String> {
-        let shader = unsafe {
-            Shader::from_file(gpu.clone(), "assets/shaders/tier0.comp")
-                .expect("Failed loading raytracer")
-        };
+        let shader = Shader::from_file(gpu.clone(), "assets/shaders/tier0.comp")
+            .expect("Failed loading raytracer");
 
         Ok(Self {
             gpu: gpu.clone(),
