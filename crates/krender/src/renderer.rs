@@ -165,8 +165,8 @@ impl Renderer {
         }
 
         self.gpu.dispatch_compute(
-            (self.resolution.x() as u32 + 15) / 16,
-            (self.resolution.y() as u32 + 15) / 16,
+            (self.resolution.x() as u32).div_ceil(16),
+            (self.resolution.y() as u32).div_ceil(16),
             1,
         );
         self.gpu.memory_barrier(
