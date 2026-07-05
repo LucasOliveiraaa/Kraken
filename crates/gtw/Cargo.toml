@@ -6,6 +6,5 @@ edition = "2024"
 [dependencies]
 kmath = { path = "../kmath" }
 glow = { workspace = true }
-gl = { workspace = true }
 bytemuck = { workspace = true }
 bitflags = "2.13.0"
