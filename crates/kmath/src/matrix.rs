@@ -1,3 +1,5 @@
+#![allow(clippy::needless_range_loop)]
+
 use std::fmt::Debug;
 
 use num_traits::{Float, Num};
