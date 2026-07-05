@@ -33,6 +33,10 @@ impl<T: Num + Copy, const N: usize> Vector<T, N> {
         N
     }
 
+    pub const fn is_empty(&self) -> bool {
+        N == 0
+    }
+
     pub fn dot(&self, other: &Self) -> T {
         self.data
             .iter()
