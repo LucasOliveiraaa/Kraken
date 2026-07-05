@@ -1,11 +1,11 @@
 mod buffer;
-mod texture;
+mod query;
 mod sampler;
 mod shader;
-mod query;
+mod texture;
 
 pub use buffer::*;
-pub use texture::*;
+pub use query::*;
 pub use sampler::*;
 pub use shader::*;
-pub use query::*;
+pub use texture::*;

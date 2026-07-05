@@ -1,4 +1,7 @@
-use std::{collections::HashSet, sync::{Arc, RwLock}};
+use std::{
+    collections::HashSet,
+    sync::{Arc, RwLock},
+};
 
 use kmath::Vec2f;
 use winit::keyboard::KeyCode;
@@ -9,8 +12,16 @@ pub enum WindowEvent {
     KeyPress(KeyCode),
     KeyRelease(KeyCode),
     MouseMove(Vec2f),
-    MousePress { left: bool, middle: bool, right: bool },
-    MouseRelease { left: bool, middle: bool, right: bool },
+    MousePress {
+        left: bool,
+        middle: bool,
+        right: bool,
+    },
+    MouseRelease {
+        left: bool,
+        middle: bool,
+        right: bool,
+    },
     MouseScroll(Vec2f),
 }
 
@@ -80,12 +91,20 @@ impl Editor {
             WindowEvent::MouseMove(position) => {
                 self.mouse_state.position = position;
             }
-            WindowEvent::MousePress { left, middle, right } => {
+            WindowEvent::MousePress {
+                left,
+                middle,
+                right,
+            } => {
                 self.mouse_state.left_button_pressed = left;
                 self.mouse_state.middle_button_pressed = middle;
                 self.mouse_state.right_button_pressed = right;
             }
-            WindowEvent::MouseRelease { left, middle, right } => {
+            WindowEvent::MouseRelease {
+                left,
+                middle,
+                right,
+            } => {
                 self.mouse_state.left_button_pressed = left;
                 self.mouse_state.middle_button_pressed = middle;
                 self.mouse_state.right_button_pressed = right;
@@ -96,7 +115,11 @@ impl Editor {
         }
     }
 
-    pub fn egui_consume_window_event(&mut self, window: &winit::window::Window, event: &winit::event::WindowEvent) -> bool {
+    pub fn egui_consume_window_event(
+        &mut self,
+        window: &winit::window::Window,
+        event: &winit::event::WindowEvent,
+    ) -> bool {
         let mut egui_state = self.egui_state.write().expect("Failed locking egui state");
         let response = egui_state.consume_window_event(window, event);
         response

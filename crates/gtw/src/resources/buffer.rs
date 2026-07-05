@@ -80,7 +80,7 @@ impl Buffer {
     pub fn new_with_data<T: bytemuck::Pod>(
         gpu: Arc<Gpu>,
         data: &[T],
-        desc: BufferDesc
+        desc: BufferDesc,
     ) -> Result<Self, String> {
         let size = std::mem::size_of_val(data);
         unsafe {
@@ -88,7 +88,11 @@ impl Buffer {
             let handle = gl.create_buffer()?;
 
             gl.bind_buffer(desc.target.into(), Some(handle));
-            gl.buffer_data_u8_slice(desc.target.into(), bytemuck::cast_slice(data), desc.usage.into());
+            gl.buffer_data_u8_slice(
+                desc.target.into(),
+                bytemuck::cast_slice(data),
+                desc.usage.into(),
+            );
             gl.bind_buffer(desc.target.into(), None);
 
             Ok(Self {

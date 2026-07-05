@@ -1,6 +1,6 @@
 mod matrix;
-mod vector;
 mod transform;
+mod vector;
 
 pub use matrix::Matrix;
 pub use vector::Vector;

@@ -64,13 +64,16 @@ impl Camera {
     pub fn get_view_matrix(&self) -> Mat4f {
         let mut transform = self.transform;
         transform.scale = Vec3f::new(1.0, 1.0, 1.0);
-        transform.to_matrix()
-            .inverse()
-            .unwrap()
+        transform.to_matrix().inverse().unwrap()
     }
 
     pub fn get_proj_matrix(&self) -> Mat4f {
-        Mat4f::from_perspective(self.fov, self.aspect_ratio(), self.near_plane, self.far_plane)
+        Mat4f::from_perspective(
+            self.fov,
+            self.aspect_ratio(),
+            self.near_plane,
+            self.far_plane,
+        )
     }
 
     pub fn get_forward(&self) -> Vec3f {

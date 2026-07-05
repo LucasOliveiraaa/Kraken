@@ -1,7 +1,7 @@
 mod app;
 mod editor;
-mod viewport;
 mod egui;
+mod viewport;
 
 use app::App;
 use winit::event_loop::EventLoop;

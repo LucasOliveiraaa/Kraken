@@ -3,7 +3,9 @@ use std::sync::Arc;
 use kmath::Vec2u;
 
 use gtw::{
-    BlitRegion, BlitTarget, Gpu, present::Framebuffer, resources::{
+    BlitRegion, BlitTarget, Gpu,
+    present::Framebuffer,
+    resources::{
         FilterMode, ImageAccess, Sampler, SamplerDesc, Texture, TextureDesc, TextureFormat,
         TextureKind, WrapMode,
     },

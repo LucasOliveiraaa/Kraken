@@ -1,9 +1,9 @@
-mod renderer;
-pub mod camera;
 mod acc_buffer;
+mod bindings;
+pub mod camera;
 pub mod config_buffer;
 pub mod profile_buffer;
-mod bindings;
+mod renderer;
 pub mod scene;
 
 pub use renderer::*;

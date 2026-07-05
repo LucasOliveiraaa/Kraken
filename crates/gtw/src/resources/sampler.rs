@@ -183,8 +183,16 @@ impl Sampler {
             gl.sampler_parameter_f32_slice(handle, glow::TEXTURE_BORDER_COLOR, &desc.border_color);
 
             if let Some(compare) = desc.compare {
-                gl.sampler_parameter_i32(handle, glow::TEXTURE_COMPARE_MODE, glow::COMPARE_REF_TO_TEXTURE as i32);
-                gl.sampler_parameter_i32(handle, glow::TEXTURE_COMPARE_FUNC, Into::<u32>::into(compare) as i32);
+                gl.sampler_parameter_i32(
+                    handle,
+                    glow::TEXTURE_COMPARE_MODE,
+                    glow::COMPARE_REF_TO_TEXTURE as i32,
+                );
+                gl.sampler_parameter_i32(
+                    handle,
+                    glow::TEXTURE_COMPARE_FUNC,
+                    Into::<u32>::into(compare) as i32,
+                );
             } else {
                 gl.sampler_parameter_i32(handle, glow::TEXTURE_COMPARE_MODE, glow::NONE as i32);
             }

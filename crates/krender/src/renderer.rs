@@ -175,7 +175,9 @@ impl Renderer {
             MemoryBarrier::SHADER_IMAGE_ACCESS_BARRIER | MemoryBarrier::FRAMEBUFFER_BARRIER,
         );
 
-        self.profile_buffer.end_frame().expect("Failed ending profile frame");
+        self.profile_buffer
+            .end_frame()
+            .expect("Failed ending profile frame");
 
         let _span = tracy_client::span!("Blit");
         self.acc_buffer.blit();

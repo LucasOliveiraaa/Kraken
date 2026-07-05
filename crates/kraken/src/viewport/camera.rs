@@ -8,12 +8,7 @@ pub struct Camera {
 }
 
 impl Camera {
-    pub fn new(
-        transform: Transform,
-        fov: f32,
-        near_plane: f32,
-        far_plane: f32,
-    ) -> Self {
+    pub fn new(transform: Transform, fov: f32, near_plane: f32, far_plane: f32) -> Self {
         let camera = krender::camera::Camera::new(transform, fov, near_plane, far_plane);
 
         Self {
