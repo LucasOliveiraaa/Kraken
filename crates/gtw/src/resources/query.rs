@@ -14,9 +14,9 @@ pub enum QueryTarget {
     SamplesPassed,
 }
 
-impl Into<u32> for QueryTarget {
-    fn into(self) -> u32 {
-        match self {
+impl From<QueryTarget> for u32 {
+    fn from(target: QueryTarget) -> u32 {
+        match target {
             QueryTarget::TimeElapsed => glow::TIME_ELAPSED,
             QueryTarget::AnySamplesPassed => glow::ANY_SAMPLES_PASSED,
             QueryTarget::AnySamplesPassedConservative => glow::ANY_SAMPLES_PASSED_CONSERVATIVE,
