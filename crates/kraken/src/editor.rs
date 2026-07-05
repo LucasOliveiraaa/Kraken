@@ -1,6 +1,4 @@
-use std::{
-    cell::RefCell, collections::HashSet, rc::Rc,
-};
+use std::{cell::RefCell, collections::HashSet, rc::Rc};
 
 use kmath::Vec2f;
 use winit::keyboard::KeyCode;
