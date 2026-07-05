@@ -68,7 +68,7 @@ struct GlConfig {
 }
 
 pub struct ConfigBuffer {
-    gpu: Arc<Gpu>,
+    _gpu: Arc<Gpu>,
 
     ssbo: Buffer,
     binding: u32,
@@ -99,7 +99,7 @@ impl ConfigBuffer {
         ssbo.bind_base(binding);
 
         Ok(Self {
-            gpu,
+            _gpu: gpu,
             ssbo,
             binding,
             data,

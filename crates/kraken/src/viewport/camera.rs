@@ -42,10 +42,6 @@ impl Camera {
         &mut self.speed
     }
 
-    pub fn raw_camera(&self) -> &krender::camera::Camera {
-        &self.camera
-    }
-
     pub fn raw_camera_mut(&mut self) -> &mut krender::camera::Camera {
         &mut self.camera
     }

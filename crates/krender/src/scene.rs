@@ -96,14 +96,14 @@ pub fn build_mock_scene() -> SceneData {
 
 /// GL buffer handles for an uploaded [`SceneData`].
 pub struct SceneBuffers {
-    gpu: Arc<Gpu>,
+    _gpu: Arc<Gpu>,
 
     volumes_count: u32,
 
-    control_points: Buffer,
-    planes: Buffer,
-    quad_nodes: Buffer,
-    volumes: Buffer,
+    _control_points: Buffer,
+    _planes: Buffer,
+    _quad_nodes: Buffer,
+    _volumes: Buffer,
 }
 
 impl SceneBuffers {
@@ -127,16 +127,16 @@ impl SceneBuffers {
         }
 
         Ok(Self {
-            gpu: gpu.clone(),
+            _gpu: gpu.clone(),
             volumes_count: data.volumes.len() as u32,
-            control_points: upload_ssbo(
+            _control_points: upload_ssbo(
                 gpu.clone(),
                 &data.control_points,
                 bindings::CONTROL_POINTS,
             )?,
-            planes: upload_ssbo(gpu.clone(), &data.planes, bindings::PLANES)?,
-            quad_nodes: upload_ssbo(gpu.clone(), &data.quad_nodes, bindings::QUAD_TREE)?,
-            volumes: upload_ssbo(gpu.clone(), &data.volumes, bindings::VOLUMES)?,
+            _planes: upload_ssbo(gpu.clone(), &data.planes, bindings::PLANES)?,
+            _quad_nodes: upload_ssbo(gpu.clone(), &data.quad_nodes, bindings::QUAD_TREE)?,
+            _volumes: upload_ssbo(gpu.clone(), &data.volumes, bindings::VOLUMES)?,
         })
     }
 
