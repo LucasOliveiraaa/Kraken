@@ -362,3 +362,64 @@ impl<T: Float> Matrix<T, 4, 4> {
         ])
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    fn assert_matrix<T: Float + Debug, const R: usize, const C: usize>(
+        a: &Matrix<T, R, C>,
+        b: &Matrix<T, R, C>,
+        epsilon: T,
+    ) {
+        for i in 0..R {
+            for j in 0..C {
+                let diff = a.data[j][i] - b.data[j][i];
+                assert!(
+                    diff.abs() <= epsilon,
+                    "Matrices differ at ({}, {}): {:?} vs {:?}",
+                    i,
+                    j,
+                    a.data[j][i],
+                    b.data[j][i]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_matrix_transpose_2x2() {
+        let m = Matrix::new([[1.0, 2.0], [3.0, 4.0]]);
+        let transposed = m.transpose();
+        let expected = Matrix::new([[1.0, 3.0], [2.0, 4.0]]);
+        assert_matrix(&transposed, &expected, 0.0001);
+    }
+
+    #[test]
+    fn test_matrix_inverse_2x2() {
+        let m = Matrix::new([[4.0, 7.0], [2.0, 6.0]]);
+        let inv = m.inverse().unwrap();
+        let expected = Matrix::new([[0.6, -0.7], [-0.2, 0.4]]);
+        assert_matrix(&inv, &expected, 0.0001);
+    }
+
+    #[test]
+    fn test_matrix_inverse_3x3() {
+        let m = Matrix::new([[1.0, 2.0, 3.0], [0.0, 1.0, 4.0], [5.0, 6.0, 0.0]]);
+        let inv = m.inverse().unwrap();
+        let expected = Matrix::new([[-24.0, 18.0, 5.0], [20.0, -15.0, -4.0], [-5.0, 4.0, 1.0]]);
+        assert_matrix(&inv, &expected, 0.0001);
+    }
+
+    #[test]
+    fn test_matrix_inverse_4x4() {
+        let m = Matrix::new([
+            [1.0, 2.0, 3.0, 4.0],
+            [5.0, 6.0, 7.0, 8.0],
+            [9.0, 10.0, 11.0, 12.0],
+            [13.0, 14.0, 15.0, 16.0],
+        ]);
+        let inv = m.inverse();
+        assert!(inv.is_none()); // This matrix is singular
+    }
+}
