@@ -9,9 +9,11 @@ use glutin_winit::DisplayBuilder;
 use gtw::Gpu;
 use kmath::Vec2f;
 use raw_window_handle::HasWindowHandle;
+use std::cell::RefCell;
 use std::ffi::CString;
 use std::num::NonZeroU32;
-use std::sync::{Arc, RwLock};
+use std::rc::Rc;
+use std::sync::Arc;
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
 use winit::event::ElementState;
@@ -111,10 +113,10 @@ impl ApplicationHandler for App {
             ),
         )
         .expect("Failed creating viewport");
-        let viewport = Arc::new(RwLock::new(viewport));
+        let viewport = Rc::new(RefCell::new(viewport));
 
         let egui_state = EguiState::new(gpu.clone(), event_loop, viewport.clone());
-        let egui_state = Arc::new(RwLock::new(egui_state));
+        let egui_state = Rc::new(RefCell::new(egui_state));
 
         self.editor = Some(Editor::new(egui_state, viewport));
 
@@ -194,7 +196,7 @@ impl ApplicationHandler for App {
                 let right =
                     button == winit::event::MouseButton::Right && state == ElementState::Pressed;
 
-                editor.handle_window_event(WindowEvent::MousePress {
+                editor.handle_window_event(WindowEvent::MouseState {
                     left: old_state.left_button_pressed || left,
                     middle: old_state.middle_button_pressed || middle,
                     right: old_state.right_button_pressed || right,

@@ -1,6 +1,5 @@
 use std::{
-    collections::HashSet,
-    sync::{Arc, RwLock},
+    cell::RefCell, collections::HashSet, rc::Rc,
 };
 
 use kmath::Vec2f;
@@ -12,12 +11,7 @@ pub enum WindowEvent {
     KeyPress(KeyCode),
     KeyRelease(KeyCode),
     MouseMove(Vec2f),
-    MousePress {
-        left: bool,
-        middle: bool,
-        right: bool,
-    },
-    MouseRelease {
+    MouseState {
         left: bool,
         middle: bool,
         right: bool,
@@ -35,15 +29,15 @@ pub struct MouseState {
 }
 
 pub struct Editor {
-    egui_state: Arc<RwLock<EguiState>>,
-    viewport: Arc<RwLock<Viewport>>,
+    egui_state: Rc<RefCell<EguiState>>,
+    viewport: Rc<RefCell<Viewport>>,
 
     pressed_keys: HashSet<KeyCode>,
     mouse_state: MouseState,
 }
 
 impl Editor {
-    pub fn new(egui_state: Arc<RwLock<EguiState>>, viewport: Arc<RwLock<Viewport>>) -> Self {
+    pub fn new(egui_state: Rc<RefCell<EguiState>>, viewport: Rc<RefCell<Viewport>>) -> Self {
         Self {
             egui_state,
             viewport,
@@ -59,14 +53,6 @@ impl Editor {
         }
     }
 
-    pub fn egui_state(&self) -> Arc<RwLock<EguiState>> {
-        Arc::clone(&self.egui_state)
-    }
-
-    pub fn viewport(&self) -> Arc<RwLock<Viewport>> {
-        Arc::clone(&self.viewport)
-    }
-
     pub fn pressed_keys(&self) -> &HashSet<KeyCode> {
         &self.pressed_keys
     }
@@ -76,7 +62,7 @@ impl Editor {
     }
 
     pub fn resize(&mut self, resolution: Vec2f) -> Result<(), String> {
-        let mut viewport = self.viewport.write().expect("Failed locking viewport");
+        let mut viewport = self.viewport.borrow_mut();
         viewport.resize(resolution)
     }
 
@@ -91,16 +77,7 @@ impl Editor {
             WindowEvent::MouseMove(position) => {
                 self.mouse_state.position = position;
             }
-            WindowEvent::MousePress {
-                left,
-                middle,
-                right,
-            } => {
-                self.mouse_state.left_button_pressed = left;
-                self.mouse_state.middle_button_pressed = middle;
-                self.mouse_state.right_button_pressed = right;
-            }
-            WindowEvent::MouseRelease {
+            WindowEvent::MouseState {
                 left,
                 middle,
                 right,
@@ -120,18 +97,17 @@ impl Editor {
         window: &winit::window::Window,
         event: &winit::event::WindowEvent,
     ) -> bool {
-        let mut egui_state = self.egui_state.write().expect("Failed locking egui state");
-        let response = egui_state.consume_window_event(window, event);
-        response
+        let mut egui_state = self.egui_state.borrow_mut();
+        egui_state.consume_window_event(window, event)
     }
 
     pub fn update(&mut self, window: &winit::window::Window) {
         {
-            let mut viewport = self.viewport.write().expect("Failed locking viewport");
+            let mut viewport = self.viewport.borrow_mut();
             viewport.update(self.pressed_keys(), self.mouse_state());
         }
         {
-            let mut egui_state = self.egui_state.write().expect("Failed locking egui state");
+            let mut egui_state = self.egui_state.borrow_mut();
             egui_state.update(window);
         }
     }

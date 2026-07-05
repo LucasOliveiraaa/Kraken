@@ -1,3 +1,5 @@
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use egui::Context as EguiContext;
@@ -5,14 +7,13 @@ use egui_glow::Painter;
 use egui_winit::State;
 use gtw::Gpu;
 use krender::config_buffer::ViewMode;
-use std::sync::RwLock;
 use winit::event_loop::ActiveEventLoop;
 use winit::window;
 
 use crate::viewport::Viewport;
 
 pub struct ConfigPanel {
-    viewport: Arc<RwLock<Viewport>>,
+    viewport: Rc<RefCell<Viewport>>,
 
     view_mode: ViewMode,
     exposure: f32,
@@ -24,9 +25,9 @@ pub struct ConfigPanel {
 }
 
 impl ConfigPanel {
-    pub fn new(viewport: Arc<RwLock<Viewport>>) -> Self {
-        let viewport_copy = Arc::clone(&viewport);
-        let viewport_lock = viewport.read().expect("Failed locking viewport");
+    pub fn new(viewport: Rc<RefCell<Viewport>>) -> Self {
+        let viewport_copy = Rc::clone(&viewport);
+        let viewport_lock = viewport.borrow();
         let config_buffer = viewport_lock.config_buffer();
 
         Self {
@@ -43,7 +44,7 @@ impl ConfigPanel {
     }
 
     pub fn render(&mut self, ui: &mut egui::Ui) {
-        let mut viewport = self.viewport.write().expect("Failed locking viewport");
+        let mut viewport = self.viewport.borrow_mut();
 
         ui.heading(format!("FPS: {:.2}", viewport.fps()));
 
@@ -69,7 +70,7 @@ impl ConfigPanel {
     }
 
     pub fn update(&self) {
-        let mut viewport = self.viewport.write().expect("Failed locking viewport");
+        let mut viewport = self.viewport.borrow_mut();
         let config_buffer = viewport.config_buffer_mut();
 
         config_buffer.set_view_mode(self.view_mode);
@@ -94,11 +95,11 @@ impl EguiState {
     pub fn new(
         gpu: Arc<Gpu>,
         event_loop: &ActiveEventLoop,
-        viewport: Arc<RwLock<Viewport>>,
+        viewport: Rc<RefCell<Viewport>>,
     ) -> Self {
         let egui_ctx = EguiContext::default();
 
-        let painter = egui_glow::Painter::new(unsafe { gpu.context() }, "", None, false)
+        let painter = egui_glow::Painter::new(gpu.context(), "", None, false)
             .expect("Failed to create egui painter");
 
         let state = egui_winit::State::new(
