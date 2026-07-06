@@ -39,6 +39,10 @@ impl Viewport {
         })
     }
 
+    pub fn switch_tier(&mut self, tier: krender::RenderTier) -> Result<(), String> {
+        self.renderer.switch_tier(tier)
+    }
+
     pub fn config_buffer(&self) -> &ConfigBuffer {
         self.renderer.config_buffer()
     }
