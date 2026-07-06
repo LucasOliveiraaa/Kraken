@@ -6,6 +6,7 @@ use egui::Context as EguiContext;
 use egui_glow::Painter;
 use egui_winit::State;
 use gtw::Gpu;
+use krender::RenderTier;
 use krender::config_buffer::ViewMode;
 use winit::event_loop::ActiveEventLoop;
 use winit::window;
@@ -15,6 +16,7 @@ use crate::viewport::Viewport;
 pub struct ConfigPanel {
     viewport: Rc<RefCell<Viewport>>,
 
+    render_tier: RenderTier,
     view_mode: ViewMode,
     exposure: f32,
     max_newton_steps: u32,
@@ -33,6 +35,7 @@ impl ConfigPanel {
         Self {
             viewport: viewport_copy,
 
+            render_tier: RenderTier::Tier0,
             view_mode: config_buffer.view_mode(),
             exposure: config_buffer.exposure(),
             max_newton_steps: config_buffer.max_newton_steps(),
@@ -49,6 +52,14 @@ impl ConfigPanel {
         ui.heading(format!("FPS: {:.2}", viewport.fps()));
 
         ui.heading("Ray casting");
+        egui::ComboBox::from_label("Render Tier")
+            .selected_text(self.render_tier.label())
+            .show_ui(ui, |ui| {
+                for tier in RenderTier::iter() {
+                    ui.selectable_value(&mut self.render_tier, tier, tier.label());
+                }
+            });
+
         egui::ComboBox::from_label("Visualization Mode")
             .selected_text(format!("{:?}", self.view_mode))
             .show_ui(ui, |ui| {
@@ -71,8 +82,9 @@ impl ConfigPanel {
 
     pub fn update(&self) {
         let mut viewport = self.viewport.borrow_mut();
-        let config_buffer = viewport.config_buffer_mut();
+        viewport.switch_tier(self.render_tier).unwrap();
 
+        let config_buffer = viewport.config_buffer_mut();
         config_buffer.set_view_mode(self.view_mode);
         config_buffer.set_exposure(self.exposure);
         config_buffer.set_max_newton_steps(self.max_newton_steps);
