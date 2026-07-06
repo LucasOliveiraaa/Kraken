@@ -36,6 +36,32 @@ pub fn halton_jitter(frame_index: u32) -> Vec2f {
     Vec2f::new(halton(h, 2) - 0.5, halton(h, 3) - 0.5)
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum RenderTier {
+    Tier0,
+    Tier2,
+}
+
+impl RenderTier {
+    pub fn label(&self) -> &'static str {
+        match self {
+            RenderTier::Tier0 => "Tier 0",
+            RenderTier::Tier2 => "Tier 2",
+        }
+    }
+
+    pub fn shader_path(&self) -> &'static str {
+        match self {
+            RenderTier::Tier0 => "assets/shaders/tier0.comp",
+            RenderTier::Tier2 => "assets/shaders/tier2.comp",
+        }
+    }
+
+    pub fn iter() -> impl Iterator<Item = Self> {
+        [Self::Tier0, Self::Tier2].into_iter()
+    }
+}
+
 pub struct Renderer {
     gpu: Arc<Gpu>,
     resolution: Vec2f,
