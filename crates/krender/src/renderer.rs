@@ -65,6 +65,8 @@ impl RenderTier {
 pub struct Renderer {
     gpu: Arc<Gpu>,
     resolution: Vec2f,
+
+    tier: RenderTier,
     shader: Shader,
 
     acc_buffer: AccBuffer,
@@ -91,6 +93,8 @@ impl Renderer {
         Ok(Self {
             gpu: gpu.clone(),
             resolution,
+
+            tier: RenderTier::Tier0,
             shader,
 
             acc_buffer: AccBuffer::new(gpu.clone(), resolution.convert_to::<u32>()).unwrap(),
@@ -130,6 +134,18 @@ impl Renderer {
     }
     pub fn config_buffer_mut(&mut self) -> &mut ConfigBuffer {
         &mut self.config_buffer
+    }
+
+    pub fn switch_tier(&mut self, tier: RenderTier) -> Result<(), String> {
+        if self.tier == tier {
+            return Ok(());
+        }
+
+        self.tier = tier;
+        self.shader = Shader::from_file(self.gpu.clone(), tier.shader_path())?;
+
+        self.frame_index = 0; // resolves ghosting artifacts when switching tiers
+        Ok(())
     }
 
     pub fn render(&mut self, camera: &mut Camera) {
