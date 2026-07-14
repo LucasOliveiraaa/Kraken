@@ -1,0 +1,10 @@
+[package]
+name = "contract"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+raw-window-handle = { workspace = true }
+kmath = { path = "../../crates/kmath" }
+thiserror = "2.0.18"
+bitflags = "2.13.0"

@@ -1,0 +1,17 @@
+[package]
+name = "vulkan"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+raw-window-handle = { workspace = true }
+kmath = { path = "../../crates/kmath" }
+contract = { path = "../contract" }
+ash = "0.38.0"
+gpu-allocator = "0.28.0"
+parking_lot = "0.12.5"
+ash-window = "0.13.0"
+spirq = "1.2.2"
